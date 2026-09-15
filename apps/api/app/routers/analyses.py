@@ -10,15 +10,18 @@ from app.schemas.companies import (
     ComparedCompany,
     CompareRequest,
     ComparisonOut,
+    SavedItem,
 )
 from app.services.analysis_jobs import (
-    CompanyAnalysis,
-    Comparison,
+    delete_analysis,
+    delete_comparison,
     get_analysis,
     get_comparison,
+    list_saved,
     start_analysis,
     start_comparison,
 )
+from app.services.analysis_models import CompanyAnalysis, Comparison
 
 log = logging.getLogger("financial-overview.analyses")
 
@@ -78,6 +81,12 @@ def _comparison_out(comparison: Comparison) -> ComparisonOut:
         input_tokens=comparison.input_tokens,
         output_tokens=comparison.output_tokens,
     )
+
+
+@router.get("", response_model=list[SavedItem])
+async def list_saved_work(limit: int = 200) -> list[SavedItem]:
+    """Everything saved, newest first. Results are kept until deleted."""
+    return [SavedItem(**item) for item in list_saved(limit)]
 
 
 @router.post(
@@ -157,3 +166,15 @@ async def read_comparison(comparison_id: str) -> ComparisonOut:
             404, "Comparison not found — it may have expired or the API restarted"
         )
     return _comparison_out(comparison)
+
+
+@router.delete("/company/{analysis_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_company_analysis(analysis_id: str) -> None:
+    if not delete_analysis(analysis_id):
+        raise HTTPException(404, "Analysis not found")
+
+
+@router.delete("/compare/{comparison_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_saved_comparison(comparison_id: str) -> None:
+    if not delete_comparison(comparison_id):
+        raise HTTPException(404, "Comparison not found")

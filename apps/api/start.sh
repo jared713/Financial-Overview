@@ -20,6 +20,7 @@ echo "[start] binding uvicorn to 0.0.0.0:${APP_PORT} (PORT env=${PORT:+set})"
 check_var COMPANIES_HOUSE_API_KEY
 check_var ANTHROPIC_API_KEY
 check_var CORS_ORIGINS
+check_var DATA_DIR
 
 echo "[start] launching uvicorn"
 exec uvicorn app.main:app --host 0.0.0.0 --port "${APP_PORT}"

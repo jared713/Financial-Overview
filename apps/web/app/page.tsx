@@ -5,9 +5,10 @@ import { Banner } from "@/components/Banner";
 import type { Picked } from "@/components/CompanyRow";
 import { ResultsPane } from "@/components/ResultsPane";
 import type { ResultTab } from "@/components/ResultsPane";
+import { SavedDrawer } from "@/components/SavedDrawer";
 import { SelectionRail } from "@/components/SelectionRail";
 import { MAX_COMPANIES, MAX_FILINGS_PER_COMPANY, api } from "@/lib/api";
-import type { CompanyHit, Comparison, FilingFeatures } from "@/lib/api";
+import type { CompanyHit, Comparison, FilingFeatures, SavedItem } from "@/lib/api";
 
 const POLL_MS = 2500;
 
@@ -25,6 +26,11 @@ export default function Page() {
   const [guidance, setGuidance] = useState("");
   const [focusId, setFocusId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Items opened from the saved library, which are not part of the working list.
+  const [extraTabs, setExtraTabs] = useState<ResultTab[]>([]);
+  const [savedOpen, setSavedOpen] = useState(false);
+  const [savedReloadKey, setSavedReloadKey] = useState(0);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -72,7 +78,10 @@ export default function Page() {
         stopPolling();
         return;
       }
-      if (running === 0) stopPolling();
+      if (running === 0) {
+        stopPolling();
+        setSavedReloadKey((n) => n + 1);
+      }
     }, POLL_MS);
   }, [stopPolling]);
 
@@ -237,12 +246,51 @@ export default function Page() {
     }
   }
 
+  async function openSavedItem(item: SavedItem) {
+    setSavedOpen(false);
+    setError(null);
+    if (tabs.some((t) => t.id === item.id)) {
+      setFocusId(item.id);
+      return;
+    }
+    try {
+      if (item.kind === "analysis") {
+        const analysis = await api.companyAnalysis(item.id);
+        setExtraTabs((current) => [
+          ...current,
+          {
+            kind: "company",
+            id: analysis.id,
+            title: analysis.company_name || analysis.company_number,
+            status: analysis.status,
+            analysis,
+          },
+        ]);
+      } else {
+        const loaded = await api.comparison(item.id);
+        setExtraTabs((current) => [
+          ...current,
+          {
+            kind: "comparison",
+            id: loaded.id,
+            title: `Comparison · ${loaded.companies.length}`,
+            status: loaded.status,
+            comparison: loaded,
+          },
+        ]);
+      }
+      setFocusId(item.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   const claudeOff = features !== null && !features.claude_review;
   const chOff = features !== null && !features.companies_house;
   const done = picked.filter((p) => p.analysis?.status === "done");
   const analysing = picked.some((p) => p.analysis?.status === "running");
 
-  const tabs: ResultTab[] = [
+  const liveTabs: ResultTab[] = [
     ...(comparison
       ? [
           {
@@ -263,6 +311,11 @@ export default function Page() {
         status: p.analysis!.status,
         analysis: p.analysis!,
       })),
+  ];
+  // Library items the working list does not already cover.
+  const tabs: ResultTab[] = [
+    ...liveTabs,
+    ...extraTabs.filter((t) => !liveTabs.some((live) => live.id === t.id)),
   ];
 
   const summary = analysing
@@ -304,11 +357,16 @@ export default function Page() {
 
       <main className="min-w-0 space-y-4 px-5 py-6 sm:px-8">
         <div className="mx-auto w-full max-w-5xl space-y-4">
-          <header>
-            <h1 className="page-title">UK company accounts</h1>
-            <p className="page-subtitle">
-              Analyse companies one at a time, then compare them when you are ready.
-            </p>
+          <header className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h1 className="page-title">UK company accounts</h1>
+              <p className="page-subtitle">
+                Analyse companies one at a time, then compare them when you are ready.
+              </p>
+            </div>
+            <button type="button" onClick={() => setSavedOpen(true)} className="btn-secondary">
+              Saved
+            </button>
           </header>
 
           {chOff && (
@@ -324,11 +382,25 @@ export default function Page() {
               switched off.
             </Banner>
           )}
+          {features?.saving_is_durable === false && (
+            <Banner tone="amber">
+              Results are being saved, but the API has no volume mounted, so they will be
+              lost on the next deploy. Attach a Railway volume at{" "}
+              <code className="font-mono text-xs">/data</code> to keep them.
+            </Banner>
+          )}
           {error && <Banner tone="red">{error}</Banner>}
 
           <ResultsPane tabs={tabs} focusId={focusId} />
         </div>
       </main>
+
+      <SavedDrawer
+        open={savedOpen}
+        onClose={() => setSavedOpen(false)}
+        onOpenItem={openSavedItem}
+        reloadKey={savedReloadKey}
+      />
     </div>
   );
 }

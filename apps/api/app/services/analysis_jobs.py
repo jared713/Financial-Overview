@@ -22,77 +22,23 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-import uuid
-from dataclasses import dataclass, field
 
 from app.config import Settings
+from app.services.analysis_models import AnalysedFilingRef, CompanyAnalysis, Comparison
 from app.services.companies_house import CompaniesHouseClient, CompaniesHouseError, Filing
 from app.services.company_research import research_company
 from app.services.filing_analysis import (
-    CompanySummary,
     FilingAnalysisError,
     analyse_filings,
     compare_companies,
 )
+from app.services.store import get_store
 
 log = logging.getLogger("financial-overview.analysis_jobs")
 
 MAX_COMPANIES_PER_COMPARISON = 5
 MAX_FILINGS_PER_COMPANY = 4
-JOB_TTL_SECONDS = 4 * 60 * 60
-
-
-@dataclass
-class AnalysedFilingRef:
-    transaction_id: str
-    made_up_to: str | None = None
-    date: str | None = None
-    description: str | None = None
-    size_bytes: int = 0
-
-
-@dataclass
-class CompanyAnalysis:
-    id: str
-    company_number: str
-    company_name: str = ""
-    status: str = "running"  # running | done | error
-    created_at: float = field(default_factory=time.time)
-    research: bool = False
-    filings: list[AnalysedFilingRef] = field(default_factory=list)
-    markdown: str | None = None
-    error: str | None = None
-    research_markdown: str | None = None
-    research_error: str | None = None
-    model: str | None = None
-    input_tokens: int = 0
-    output_tokens: int = 0
-
-    def as_summary(self) -> CompanySummary:
-        """What the comparison reads: the accounts review plus any web research."""
-        markdown = self.markdown or ""
-        if self.research_markdown:
-            markdown = f"{markdown}\n\n### Business and recent news\n\n{self.research_markdown}"
-        return CompanySummary(
-            company_number=self.company_number,
-            company_name=self.company_name or self.company_number,
-            markdown=markdown,
-        )
-
-
-@dataclass
-class Comparison:
-    id: str
-    analysis_ids: list[str]
-    status: str = "running"  # running | done | error
-    created_at: float = field(default_factory=time.time)
-    guidance: str | None = None
-    companies: list[tuple[str, str]] = field(default_factory=list)  # (number, name)
-    markdown: str | None = None
-    error: str | None = None
-    model: str | None = None
-    input_tokens: int = 0
-    output_tokens: int = 0
+CACHE_TTL_SECONDS = 4 * 60 * 60
 
 
 _analyses: dict[str, CompanyAnalysis] = {}
@@ -100,19 +46,37 @@ _comparisons: dict[str, Comparison] = {}
 
 
 def _prune() -> None:
-    cutoff = time.time() - JOB_TTL_SECONDS
-    for store in (_analyses, _comparisons):
-        for key, value in list(store.items()):
+    """Drop old entries from the in-memory cache. Nothing is lost — finished runs
+    are in the store, and get_analysis reads through to it."""
+    cutoff = time.time() - CACHE_TTL_SECONDS
+    for cache in (_analyses, _comparisons):
+        for key, value in list(cache.items()):
             if value.created_at < cutoff:
-                store.pop(key, None)
+                cache.pop(key, None)
 
 
 def get_analysis(analysis_id: str) -> CompanyAnalysis | None:
-    return _analyses.get(analysis_id)
+    """In-flight runs live in memory; finished ones are read back from the store,
+    so results outlive the process that produced them."""
+    return _analyses.get(analysis_id) or get_store().get_analysis(analysis_id)
 
 
 def get_comparison(comparison_id: str) -> Comparison | None:
-    return _comparisons.get(comparison_id)
+    return _comparisons.get(comparison_id) or get_store().get_comparison(comparison_id)
+
+
+def list_saved(limit: int = 200):
+    return get_store().list_saved(limit)
+
+
+def delete_analysis(analysis_id: str) -> bool:
+    _analyses.pop(analysis_id, None)
+    return get_store().delete_analysis(analysis_id)
+
+
+def delete_comparison(comparison_id: str) -> bool:
+    _comparisons.pop(comparison_id, None)
+    return get_store().delete_comparison(comparison_id)
 
 
 def _select_filings(all_filings: list[Filing], transaction_ids: list[str]) -> list[Filing]:
@@ -202,6 +166,11 @@ async def _run_analysis(
         log.exception("Analysis failed for %s", analysis.company_number)
         analysis.status = "error"
         analysis.error = f"Unexpected error: {e}"
+    finally:
+        try:
+            get_store().save_analysis(analysis)
+        except Exception:
+            log.exception("Could not save analysis %s", analysis.id)
 
 
 def start_analysis(
@@ -213,9 +182,7 @@ def start_analysis(
     settings: Settings,
 ) -> CompanyAnalysis:
     _prune()
-    analysis = CompanyAnalysis(
-        id=uuid.uuid4().hex, company_number=company_number, research=research
-    )
+    analysis = CompanyAnalysis(company_number=company_number, research=research)
     _analyses[analysis.id] = analysis
     asyncio.create_task(_run_analysis(analysis, transaction_ids, trading_name, settings))
     return analysis
@@ -245,6 +212,11 @@ async def _run_comparison(
         log.exception("Comparison %s failed", comparison.id)
         comparison.status = "error"
         comparison.error = f"Unexpected error: {e}"
+    finally:
+        try:
+            get_store().save_comparison(comparison)
+        except Exception:
+            log.exception("Could not save comparison %s", comparison.id)
 
 
 def start_comparison(
@@ -252,7 +224,6 @@ def start_comparison(
 ) -> Comparison:
     _prune()
     comparison = Comparison(
-        id=uuid.uuid4().hex,
         analysis_ids=[a.id for a in analyses],
         guidance=guidance,
         companies=[(a.company_number, a.company_name) for a in analyses],

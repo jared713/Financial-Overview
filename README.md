@@ -31,9 +31,14 @@ so it can be grounded in the filed figures. It uses Claude's server-side `web_se
 Runs are asynchronous: the API returns a job id and the page renders each company's
 review as it lands.
 
+Everything you run is **kept until you delete it**. The **Saved** button opens the
+library — every analysis and comparison, newest first, each with Open and Delete. Storage
+is SQLite in `DATA_DIR`; mount a Railway volume there and it survives redeploys.
+
 ## Stack
 
-- **Backend** (`apps/api`): FastAPI, deployed to Railway. Stateless — no database.
+- **Backend** (`apps/api`): FastAPI, deployed to Railway. SQLite on a mounted volume for
+  saved results; nothing else persisted.
 - **Frontend** (`apps/web`): Next.js 14 (App Router) + Tailwind, deployed to Vercel.
 - **Data source**: Companies House public data API + document API. See [docs/SETUP.md](./docs/SETUP.md).
 - **Review**: Anthropic Messages API — filing PDFs go up as `document` blocks, no OCR step.
@@ -47,7 +52,7 @@ apps/
       routers/       /companies, /analyses
       schemas/       Pydantic response models
       services/      Companies House client, Claude filing analysis,
-                     web research, multi-company run jobs
+                     web research, run jobs, SQLite store
     tests/
   web/         Next.js app
     app/             the search + review page
@@ -91,6 +96,9 @@ cd apps/web && npm install && npm run dev
 | GET | `/analyses/company/{id}` | Poll that company's review |
 | POST | `/analyses/compare` | Compare finished analyses: `{analysis_ids: [], guidance?}` |
 | GET | `/analyses/compare/{id}` | Poll the comparison |
+| GET | `/analyses` | The saved library, newest first |
+| DELETE | `/analyses/company/{id}` | Delete a saved analysis |
+| DELETE | `/analyses/compare/{id}` | Delete a saved comparison |
 | POST | `/companies/{number}/analyse` | Single company, synchronous → Markdown review |
 
 Interactive docs at `/docs` when the API is running.

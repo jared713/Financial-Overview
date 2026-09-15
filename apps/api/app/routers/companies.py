@@ -19,6 +19,7 @@ from app.services.companies_house import (
     Filing,
 )
 from app.services.filing_analysis import FilingAnalysisError, analyse_filings
+from app.services.store import get_store
 
 log = logging.getLogger("financial-overview.companies")
 
@@ -90,6 +91,7 @@ def feature_status() -> FeatureStatus:
         companies_house=bool(settings.companies_house_api_key),
         claude_review=bool(settings.anthropic_api_key),
         model=settings.anthropic_model if settings.anthropic_api_key else None,
+        saving_is_durable=get_store().durable,
     )
 
 

@@ -37,6 +37,18 @@ export type FilingFeatures = {
   companies_house: boolean;
   claude_review: boolean;
   model?: string | null;
+  /** False when the API has no volume, so saved work is lost on redeploy. */
+  saving_is_durable: boolean;
+};
+
+export type SavedItem = {
+  kind: "analysis" | "comparison";
+  id: string;
+  created_at: number;
+  title: string;
+  subtitle: string;
+  status: RunStatus;
+  research: boolean;
 };
 
 export const MAX_COMPANIES = 5;
@@ -144,6 +156,12 @@ export const api = {
     }),
   comparison: (id: string) => apiFetch<Comparison>(`/analyses/compare/${id}`),
 
+  saved: () => apiFetch<SavedItem[]>("/analyses"),
+  deleteAnalysis: (id: string) =>
+    apiFetch<void>(`/analyses/company/${id}`, { method: "DELETE" }),
+  deleteComparison: (id: string) =>
+    apiFetch<void>(`/analyses/compare/${id}`, { method: "DELETE" }),
+
   analyseFilings: (
     companyNumber: string,
     transactionIds: string[],
@@ -180,6 +198,15 @@ export function estimateCost(pages: number, model?: string | null): string | nul
   const dollars = (pages * TOKENS_PER_PAGE * price) / 1_000_000;
   if (dollars < 0.1) return "under $0.10";
   return `~$${dollars.toFixed(dollars < 10 ? 2 : 0)}`;
+}
+
+export function fmtWhen(epochSeconds: number): string {
+  const date = new Date(epochSeconds * 1000);
+  const days = (Date.now() - date.getTime()) / 86_400_000;
+  if (days < 1) {
+    return date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  }
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
 }
 
 export function fmtBytes(bytes: number): string {

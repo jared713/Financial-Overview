@@ -358,3 +358,63 @@ def test_compare_rejects_an_unfinished_analysis(client, monkeypatch, fake_backen
     )
     assert resp.status_code == 409
     assert "not finished" in resp.json()["detail"]
+
+
+async def test_finished_analysis_is_saved_and_readable_after_the_cache_is_cleared(
+    fake_backends, isolated_store
+):
+    from app.services.analysis_jobs import _analyses, get_analysis
+
+    analysis = start_analysis(
+        company_number="00445790",
+        transaction_ids=["t-2024"],
+        trading_name=None,
+        research=False,
+        settings=SETTINGS,
+    )
+    await _settle()
+
+    assert isolated_store.get_analysis(analysis.id) is not None
+    _analyses.clear()  # as if the process restarted
+    restored = get_analysis(analysis.id)
+    assert restored is not None
+    assert restored.markdown == "review of COMPANY 00445790"
+
+
+async def test_failed_analysis_is_saved_too(fake_backends, isolated_store):
+    analysis = start_analysis(
+        company_number="99999999",
+        transaction_ids=["t-2024"],
+        trading_name=None,
+        research=False,
+        settings=SETTINGS,
+    )
+    await _settle()
+
+    saved = isolated_store.get_analysis(analysis.id)
+    assert saved is not None and saved.status == "error"
+
+
+def test_library_endpoints_list_and_delete(client, fake_backends, isolated_store):
+    from app.services.analysis_models import CompanyAnalysis as Stored
+
+    isolated_store.save_analysis(
+        Stored(id="kept", company_number="00445790", company_name="TESCO PLC", status="done")
+    )
+    listing = client.get("/analyses").json()
+    assert [i["id"] for i in listing] == ["kept"]
+    assert listing[0]["kind"] == "analysis"
+
+    assert client.delete("/analyses/company/kept").status_code == 204
+    assert client.get("/analyses").json() == []
+    assert client.delete("/analyses/company/kept").status_code == 404
+
+
+def test_saved_analysis_is_readable_through_the_api(client, isolated_store):
+    from app.services.analysis_models import CompanyAnalysis as Stored
+
+    isolated_store.save_analysis(
+        Stored(id="old", company_number="00445790", status="done", markdown="from disk")
+    )
+    body = client.get("/analyses/company/old").json()
+    assert body["markdown"] == "from disk"

@@ -5,6 +5,8 @@ class FeatureStatus(BaseModel):
     companies_house: bool
     claude_review: bool
     model: str | None = None
+    # False when results are saved to ephemeral disk (no volume mounted).
+    saving_is_durable: bool = True
 
 
 class CompanySearchHit(BaseModel):
@@ -109,3 +111,13 @@ class ComparisonOut(BaseModel):
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+
+
+class SavedItem(BaseModel):
+    kind: str  # analysis | comparison
+    id: str
+    created_at: float
+    title: str
+    subtitle: str = ""
+    status: str
+    research: bool = False

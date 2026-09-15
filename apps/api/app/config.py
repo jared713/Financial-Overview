@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     # Register a key at https://developer.company-information.service.gov.uk/
     companies_house_api_key: str | None = None
 
+    # Saved analyses. Point this at a mounted Railway volume to keep results
+    # across redeploys; without one the app still saves, but to ephemeral disk.
+    data_dir: str = "/data"
+
     # Claude review of filing PDFs
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-opus-5"

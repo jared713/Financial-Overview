@@ -8,10 +8,9 @@ GitHub (main)
    └─> Railway ── apps/api      (FastAPI, Dockerfile)
 ```
 
-No database — the API keeps nothing durable. Company analyses and comparisons are held
-in memory for four hours, so **run the API as a single replica**: a second instance would
-not see the first one's work, and polling would 404 at random. A redeploy drops finished
-analyses too, so a comparison started afterwards will ask you to re-run those companies.
+Results are saved to SQLite in `DATA_DIR` and kept until deleted. **Run the API as a
+single replica** — one process owns that file, and in-flight runs are tracked in memory,
+so a second instance would not see the first one's work.
 
 ## Railway — API
 
@@ -30,6 +29,23 @@ analyses too, so a comparison started afterwards will ask you to re-run those co
      `{"companies_house":true,"claude_review":true,…}`
 
 The startup log prints which variables are set (names only, never values).
+
+## Railway — storage volume
+
+Without a volume the SQLite file sits on the container's filesystem and is wiped on
+every deploy. The app still runs and still saves; it just forgets. The page shows an
+amber banner when that is the case, and `/companies/features` reports
+`saving_is_durable: false`.
+
+To keep saved work:
+
+1. On the `api` service → **Settings** → **Volumes** → **Add volume**.
+2. Mount path: `/data` (matching `DATA_DIR`).
+3. Redeploy. The startup log prints the store path and whether it is durable.
+
+A few MB covers thousands of analyses — the rows are Markdown, and filing PDFs are not
+kept. To back it up, or move it, copy `/data/financial-overview.sqlite3` (and the `-wal`
+file alongside it) via a Railway shell.
 
 ## Vercel — Web
 
@@ -64,7 +80,9 @@ returning 200.
 ## Before making the API public
 
 The API has **no authentication**. Anyone who finds the Railway URL can spend your
-Anthropic credit through `/companies/{no}/analyse`. Options, cheapest first:
+Anthropic credit, **read every saved analysis, and delete them**. That matters more now
+that results persist — the library is the whole history of what you have researched.
+Options, cheapest first:
 
 1. Keep the URL private and unshared (fine for personal use, but it is not a secret —
    Railway URLs are guessable and the Vercel app exposes it to the browser).
