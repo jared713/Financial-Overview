@@ -113,3 +113,42 @@ def test_survives_reopening_the_file(tmp_path):
     Store(path).save_analysis(_analysis())
     reopened = Store(path)
     assert reopened.get_analysis("a1") is not None
+
+
+def test_round_trips_ownership(store):
+    store.save_analysis(_analysis(ownership_markdown="## Shareholders\nJane, 60%."))
+    loaded = store.get_analysis("a1")
+    assert loaded is not None
+    assert loaded.ownership_markdown == "## Shareholders\nJane, 60%."
+
+
+def test_opens_a_file_created_before_the_ownership_columns_existed(tmp_path):
+    """An older database must gain the new columns rather than fail to open."""
+    import sqlite3
+
+    path = tmp_path / "old.sqlite3"
+    legacy = sqlite3.connect(path)
+    legacy.execute(
+        """CREATE TABLE analyses (
+               id TEXT PRIMARY KEY, created_at REAL NOT NULL, company_number TEXT NOT NULL,
+               company_name TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+               research INTEGER NOT NULL DEFAULT 0, filings TEXT NOT NULL DEFAULT '[]',
+               markdown TEXT, error TEXT, model TEXT,
+               input_tokens INTEGER NOT NULL DEFAULT 0,
+               output_tokens INTEGER NOT NULL DEFAULT 0)"""
+    )
+    legacy.execute(
+        "INSERT INTO analyses (id, created_at, company_number, status, markdown) "
+        "VALUES ('old', 1.0, '00445790', 'done', 'kept')"
+    )
+    legacy.commit()
+    legacy.close()
+
+    upgraded = Store(path)
+    restored = upgraded.get_analysis("old")
+    assert restored is not None
+    assert restored.markdown == "kept"
+    assert restored.ownership_markdown is None
+
+    upgraded.save_analysis(_analysis(id="new", ownership_markdown="## Shareholders"))
+    assert upgraded.get_analysis("new").ownership_markdown == "## Shareholders"

@@ -33,8 +33,12 @@ log = logging.getLogger("financial-overview.companies_house")
 PUBLIC_API = "https://api.company-information.service.gov.uk"
 DOCUMENT_API = "https://document-api.company-information.service.gov.uk"
 
-# Filing-history categories that contain a set of statutory accounts.
+# Filing-history categories. Accounts carry the numbers; confirmation statements
+# carry the shareholder list (in full every third year, changes in between) and
+# capital filings carry share allotments and statements of capital.
 ACCOUNTS_CATEGORY = "accounts"
+CONFIRMATION_CATEGORY = "confirmation-statement"
+CAPITAL_CATEGORY = "capital"
 
 MAX_PDF_BYTES = 30 * 1024 * 1024
 
@@ -203,17 +207,65 @@ class CompaniesHouseClient:
     async def get_company(self, company_number: str) -> dict[str, Any]:
         return await self._get_json(f"{PUBLIC_API}/company/{company_number}")
 
-    async def list_account_filings(
-        self, company_number: str, *, limit: int = 50
+    async def list_filings(
+        self, company_number: str, category: str, *, limit: int = 50
     ) -> list[Filing]:
         data = await self._get_json(
             f"{PUBLIC_API}/company/{company_number}/filing-history",
-            {"category": ACCOUNTS_CATEGORY, "items_per_page": limit},
+            {"category": category, "items_per_page": limit},
         )
         filings = [parse_filing(item) for item in data.get("items") or []]
         # Newest first — Companies House already sorts this way, but paper and
         # electronic filings have been observed interleaved out of order.
         return sorted(filings, key=lambda f: f.date or "", reverse=True)
+
+    async def list_account_filings(
+        self, company_number: str, *, limit: int = 50
+    ) -> list[Filing]:
+        return await self.list_filings(company_number, ACCOUNTS_CATEGORY, limit=limit)
+
+    async def list_ownership_filings(self, company_number: str) -> list[Filing]:
+        """The filings that name shareholders: recent confirmation statements
+        first, then capital filings (allotments, statements of capital)."""
+        confirmations = await self.list_filings(
+            company_number, CONFIRMATION_CATEGORY, limit=10
+        )
+        capital = await self.list_filings(company_number, CAPITAL_CATEGORY, limit=10)
+        downloadable = [f for f in confirmations if f.document_id][:2]
+        downloadable += [f for f in capital if f.document_id][:2]
+        return downloadable
+
+    async def get_persons_with_significant_control(
+        self, company_number: str
+    ) -> dict[str, Any]:
+        """PSC register: who owns or controls more than 25%.
+
+        A company with nothing registered answers 404 rather than an empty list,
+        and listed companies are exempt entirely — both are normal, so this
+        returns an empty result instead of raising.
+        """
+        try:
+            return await self._get_json(
+                f"{PUBLIC_API}/company/{company_number}/persons-with-significant-control",
+                {"items_per_page": 50},
+            )
+        except CompaniesHouseError as e:
+            if e.status_code == 404:
+                return {"items": [], "total_results": 0}
+            raise
+
+    async def get_psc_statements(self, company_number: str) -> dict[str, Any]:
+        """Why a company has no PSC listed — exempt, still investigating, and so on."""
+        try:
+            return await self._get_json(
+                f"{PUBLIC_API}/company/{company_number}"
+                "/persons-with-significant-control-statements",
+                {"items_per_page": 20},
+            )
+        except CompaniesHouseError as e:
+            if e.status_code == 404:
+                return {"items": []}
+            raise
 
     async def fetch_document_pdf(self, document_id: str) -> bytes:
         """Download one filing as PDF bytes, following the S3 redirect by hand."""

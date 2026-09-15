@@ -35,6 +35,8 @@ class CompanyAnalysis:
     error: str | None = None
     research_markdown: str | None = None
     research_error: str | None = None
+    ownership_markdown: str | None = None
+    ownership_error: str | None = None
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
@@ -51,6 +53,8 @@ class CompanyAnalysis:
                 f"### Business and recent news\n\n{self.research_markdown}"
                 f"\n\n### Filed accounts\n\n{markdown}"
             )
+        if self.ownership_markdown:
+            markdown = f"{markdown}\n\n### Ownership and control\n\n{self.ownership_markdown}"
         return CompanySummary(
             company_number=self.company_number,
             company_name=self.company_name or self.company_number,

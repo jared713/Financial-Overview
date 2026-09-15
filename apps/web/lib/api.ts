@@ -75,6 +75,8 @@ export type CompanyAnalysis = {
   error?: string | null;
   research_markdown?: string | null;
   research_error?: string | null;
+  ownership_markdown?: string | null;
+  ownership_error?: string | null;
   model?: string | null;
   input_tokens: number;
   output_tokens: number;

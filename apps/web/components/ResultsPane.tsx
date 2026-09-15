@@ -100,7 +100,9 @@ function AnalysisBody({ analysis }: { analysis: CompanyAnalysis }) {
     return (
       <Waiting
         label={
-          analysis.research ? "Reading the filings, then the web…" : "Reading the filings…"
+          analysis.research
+            ? "Reading the filings, the web, and the ownership record…"
+            : "Reading the filings and the ownership record…"
         }
       />
     );
@@ -115,11 +117,13 @@ function AnalysisBody({ analysis }: { analysis: CompanyAnalysis }) {
         subtitle={analysis.filings
           .map((f) => `${f.made_up_to ?? f.date} (${fmtBytes(f.size_bytes)})`)
           .join(" · ")}
-        text={
-          analysis.research_markdown
-            ? `${analysis.research_markdown}\n\n${analysis.markdown}`
-            : (analysis.markdown ?? "")
-        }
+        text={[
+          analysis.research_markdown,
+          analysis.ownership_markdown,
+          analysis.markdown,
+        ]
+          .filter(Boolean)
+          .join("\n\n")}
       />
       {analysis.research_markdown && (
         <div className="mb-6">
@@ -132,7 +136,24 @@ function AnalysisBody({ analysis }: { analysis: CompanyAnalysis }) {
           Web research unavailable: {analysis.research_error}
         </p>
       )}
-      <div className={analysis.research_markdown ? "border-t border-line pt-5" : ""}>
+      {analysis.ownership_markdown && (
+        <div className="mb-6 border-t border-line pt-5">
+          <p className="label mb-3">Ownership and investors</p>
+          <Markdown>{analysis.ownership_markdown}</Markdown>
+        </div>
+      )}
+      {analysis.ownership_error && (
+        <p className="mb-6 border-t border-line pt-5 text-sm text-amber-700 dark:text-amber-300">
+          Ownership unavailable: {analysis.ownership_error}
+        </p>
+      )}
+      <div
+        className={
+          analysis.research_markdown || analysis.ownership_markdown
+            ? "border-t border-line pt-5"
+            : ""
+        }
+      >
         <p className="label mb-3">From the filed accounts</p>
         <Markdown>{analysis.markdown ?? ""}</Markdown>
       </div>

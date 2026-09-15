@@ -86,6 +86,8 @@ class CompanyAnalysisOut(BaseModel):
     error: str | None = None
     research_markdown: str | None = None
     research_error: str | None = None
+    ownership_markdown: str | None = None
+    ownership_error: str | None = None
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0

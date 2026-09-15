@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS analyses (
     error TEXT,
     research_markdown TEXT,
     research_error TEXT,
+    ownership_markdown TEXT,
+    ownership_error TEXT,
     model TEXT,
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0
@@ -70,7 +72,28 @@ class Store:
         # WAL keeps the reader (the library listing) off the writer's back.
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(SCHEMA)
+        self._add_missing_columns()
         self._conn.commit()
+
+    def _add_missing_columns(self) -> None:
+        """CREATE TABLE IF NOT EXISTS leaves an older file on its old shape, so
+        add any column the schema has gained since. Cheap enough to run always."""
+        wanted = {
+            "analyses": {
+                "research_markdown": "TEXT",
+                "research_error": "TEXT",
+                "ownership_markdown": "TEXT",
+                "ownership_error": "TEXT",
+            }
+        }
+        for table, columns in wanted.items():
+            existing = {
+                row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")
+            }
+            for name, kind in columns.items():
+                if name not in existing:
+                    log.info("Adding column %s.%s", table, name)
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
 
     # --- writes -------------------------------------------------------
 
@@ -80,13 +103,16 @@ class Store:
             self._conn.execute(
                 """INSERT INTO analyses (id, created_at, company_number, company_name,
                        status, research, filings, markdown, error, research_markdown,
-                       research_error, model, input_tokens, output_tokens)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                       research_error, ownership_markdown, ownership_error, model,
+                       input_tokens, output_tokens)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                        company_name=excluded.company_name, status=excluded.status,
                        filings=excluded.filings, markdown=excluded.markdown,
                        error=excluded.error, research_markdown=excluded.research_markdown,
-                       research_error=excluded.research_error, model=excluded.model,
+                       research_error=excluded.research_error,
+                       ownership_markdown=excluded.ownership_markdown,
+                       ownership_error=excluded.ownership_error, model=excluded.model,
                        input_tokens=excluded.input_tokens,
                        output_tokens=excluded.output_tokens""",
                 (
@@ -101,6 +127,8 @@ class Store:
                     analysis.error,
                     analysis.research_markdown,
                     analysis.research_error,
+                    analysis.ownership_markdown,
+                    analysis.ownership_error,
                     analysis.model,
                     analysis.input_tokens,
                     analysis.output_tokens,
@@ -216,6 +244,8 @@ def _analysis_from_row(row: sqlite3.Row) -> CompanyAnalysis:
         error=row["error"],
         research_markdown=row["research_markdown"],
         research_error=row["research_error"],
+        ownership_markdown=row["ownership_markdown"],
+        ownership_error=row["ownership_error"],
         model=row["model"],
         input_tokens=row["input_tokens"],
         output_tokens=row["output_tokens"],

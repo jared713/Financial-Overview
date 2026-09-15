@@ -9,9 +9,10 @@ own tab on the right. Repeat for up to **5 companies**, then hit **Compare** —
 optional steer on what matters — for a side-by-side comparison in its own tab. Every
 filing also links to the raw PDF.
 
-Every review starts with the open web — what the company actually does, how it makes
-money, and recent news — cross-checked against the filed figures, then the accounts
-themselves. Because businesses are usually known online by something other than their
+Every review has three parts: the open web — what the company actually does, how it makes
+money, and recent news — cross-checked against the filed figures; then **ownership and
+investors**, from the PSC register and the shareholder lists inside confirmation
+statements; then the accounts themselves. Because businesses are usually known online by something other than their
 registered name, each company has a **Trades under a different name** box; fill it in and
 the search keys off that instead.
 
@@ -41,7 +42,8 @@ is SQLite in `DATA_DIR`; mount a Railway volume there and it survives redeploys.
 - **Backend** (`apps/api`): FastAPI, deployed to Railway. SQLite on a mounted volume for
   saved results; nothing else persisted.
 - **Frontend** (`apps/web`): Next.js 14 (App Router) + Tailwind, deployed to Vercel.
-- **Data source**: Companies House public data API + document API. See [docs/SETUP.md](./docs/SETUP.md).
+- **Data sources**: Companies House public data API (search, filing history, PSC
+  register) + document API (the filed PDFs). See [docs/SETUP.md](./docs/SETUP.md).
 - **Review**: Anthropic Messages API — filing PDFs go up as `document` blocks, no OCR step.
 
 ## Layout
@@ -53,7 +55,7 @@ apps/
       routers/       /companies, /analyses
       schemas/       Pydantic response models
       services/      Companies House client, Claude filing analysis,
-                     web research, run jobs, SQLite store
+                     web research, ownership, run jobs, SQLite store
     tests/
   web/         Next.js app
     app/             the search + review page

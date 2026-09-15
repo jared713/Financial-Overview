@@ -72,6 +72,21 @@ most recent period, how they compare, standouts, comparability caveats, and watc
 - *Recent news* — roughly the last 18 months, dated and attributed.
 - *Sources* — title and URL for each.
 
+**Ownership and investors** comes next, from two parts of the Companies House record:
+
+- the **PSC register** (`/persons-with-significant-control`), which is structured and
+  reliable but only reaches control above 25%, stops at the first corporate layer, and
+  does not apply to listed companies at all;
+- the **confirmation statements and capital filings**, whose PDFs carry the actual
+  shareholder list — in full every third year, as changes in between — plus the share
+  structure.
+
+Claude reconciles the two and is asked to be explicit about what the record does *not*
+show: nominee and holding-company layers, holdings under the threshold, and a shareholder
+list older than the latest statement. Those limits matter — for a listed plc the register
+is mostly nominees, and for a small company the PSC may be a holding company with the
+real owners a layer further up.
+
 Then the filed accounts follow, under their own heading. Research runs *after* the
 accounts review so it can be grounded in the filed figures, but reads first because what
 the business does frames every number.
@@ -101,6 +116,8 @@ a company only needs analysing again if you change which years it covers.
   per company while it works.
 - Web research adds time and cost to every company: a handful of searches and page
   fetches, billed on top of the tokens.
+- The ownership pass adds one more Claude call and one or two small PDFs (confirmation
+  statements run to a few pages, unlike accounts).
 - Research quality varies wildly by company. A listed plc is well covered; a small private
   company may have no website and no coverage at all, and Claude will say so rather than
   invent something.

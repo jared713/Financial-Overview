@@ -60,6 +60,8 @@ def _analysis_out(analysis: CompanyAnalysis) -> CompanyAnalysisOut:
         error=analysis.error,
         research_markdown=analysis.research_markdown,
         research_error=analysis.research_error,
+        ownership_markdown=analysis.ownership_markdown,
+        ownership_error=analysis.ownership_error,
         model=analysis.model,
         input_tokens=analysis.input_tokens,
         output_tokens=analysis.output_tokens,

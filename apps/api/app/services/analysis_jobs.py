@@ -32,6 +32,7 @@ from app.services.filing_analysis import (
     analyse_filings,
     compare_companies,
 )
+from app.services.ownership import analyse_ownership
 from app.services.store import get_store
 
 log = logging.getLogger("financial-overview.analysis_jobs")
@@ -157,6 +158,36 @@ async def _run_analysis(
             except Exception as e:
                 log.exception("Research failed for %s", analysis.company_number)
                 analysis.research_error = f"Unexpected error: {e}"
+
+        # Ownership comes from a different corner of the Companies House record —
+        # the PSC register plus confirmation statements — so it is its own pass.
+        # Failing here does not fail the analysis.
+        try:
+            psc = await client.get_persons_with_significant_control(analysis.company_number)
+            statements = await client.get_psc_statements(analysis.company_number)
+            ownership_filings = await client.list_ownership_filings(analysis.company_number)
+            ownership_documents = (
+                await client.fetch_filing_documents(ownership_filings)
+                if ownership_filings
+                else []
+            )
+            ownership = await analyse_ownership(
+                company_name=analysis.company_name,
+                company_number=analysis.company_number,
+                psc=psc,
+                statements=statements,
+                documents=ownership_documents,
+                api_key=settings.anthropic_api_key,
+                model=settings.anthropic_model,
+            )
+            analysis.ownership_markdown = ownership.markdown
+            analysis.input_tokens += ownership.input_tokens or 0
+            analysis.output_tokens += ownership.output_tokens or 0
+        except (CompaniesHouseError, FilingAnalysisError) as e:
+            analysis.ownership_error = str(e)
+        except Exception as e:
+            log.exception("Ownership review failed for %s", analysis.company_number)
+            analysis.ownership_error = f"Unexpected error: {e}"
 
         analysis.status = "done"
     except (CompaniesHouseError, FilingAnalysisError) as e:

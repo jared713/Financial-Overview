@@ -132,10 +132,33 @@ class FakeClient:
     async def fetch_filing_documents(self, filings):
         return [FilingDocument(filing=f, content=b"%PDF-1.4 fake") for f in filings]
 
+    async def get_persons_with_significant_control(self, company_number):
+        return {
+            "items": [
+                {
+                    "name": "Jane Holder",
+                    "kind": "individual-person-with-significant-control",
+                    "natures_of_control": ["ownership-of-shares-50-to-75-percent"],
+                    "notified_on": "2017-04-06",
+                }
+            ]
+        }
+
+    async def get_psc_statements(self, company_number):
+        return {"items": []}
+
+    async def list_ownership_filings(self, company_number):
+        return [_filing("cs-2024", "2024-06-01", "2024-05-31")]
+
 
 @pytest.fixture
 def fake_backends(monkeypatch):
-    calls: dict[str, list] = {"analyse": [], "research": [], "compare": []}
+    calls: dict[str, list] = {
+        "analyse": [],
+        "research": [],
+        "ownership": [],
+        "compare": [],
+    }
 
     async def fake_analyse(documents, **kwargs):
         calls["analyse"].append(kwargs["company_number"])
@@ -155,6 +178,15 @@ def fake_backends(monkeypatch):
             output_tokens=5,
         )
 
+    async def fake_ownership(**kwargs):
+        calls["ownership"].append(kwargs["company_number"])
+        return AnalysisResult(
+            markdown="## Shareholders\nJane Holder, 60%.",
+            model="claude-test",
+            input_tokens=30,
+            output_tokens=6,
+        )
+
     async def fake_compare(summaries, **kwargs):
         calls["compare"].append(
             {
@@ -170,6 +202,7 @@ def fake_backends(monkeypatch):
     monkeypatch.setattr(analysis_jobs, "CompaniesHouseClient", FakeClient)
     monkeypatch.setattr(analysis_jobs, "analyse_filings", fake_analyse)
     monkeypatch.setattr(analysis_jobs, "research_company", fake_research)
+    monkeypatch.setattr(analysis_jobs, "analyse_ownership", fake_ownership)
     monkeypatch.setattr(analysis_jobs, "compare_companies", fake_compare)
     return calls
 
@@ -194,7 +227,10 @@ async def test_company_analysis_runs_and_records_filings(fake_backends):
     assert analysis.company_name == "COMPANY 00445790"
     assert analysis.markdown == "review of COMPANY 00445790"
     assert [f.transaction_id for f in analysis.filings] == ["t-2023", "t-2024"]
-    assert analysis.input_tokens == 100
+    # Accounts review plus the ownership pass.
+    assert analysis.input_tokens == 130
+    assert analysis.ownership_markdown == "## Shareholders\nJane Holder, 60%."
+    assert fake_backends["ownership"] == ["00445790"]
     assert fake_backends["research"] == []
 
 
@@ -210,7 +246,8 @@ async def test_research_runs_when_asked_and_uses_the_trading_name(fake_backends)
 
     assert fake_backends["research"] == [("00445790", "Tesco")]
     assert analysis.research_markdown == "## Revenue model\nWidgets."
-    assert analysis.input_tokens == 120
+    # Accounts + research + ownership.
+    assert analysis.input_tokens == 150
 
 
 async def test_research_failure_leaves_the_accounts_review_intact(monkeypatch, fake_backends):
@@ -422,3 +459,48 @@ def test_saved_analysis_is_readable_through_the_api(client, isolated_store):
     )
     body = client.get("/analyses/company/old").json()
     assert body["markdown"] == "from disk"
+
+
+async def test_ownership_failure_leaves_the_rest_of_the_analysis_intact(
+    monkeypatch, fake_backends
+):
+    async def broken(**kwargs):
+        raise FilingAnalysisError("psc unavailable")
+
+    monkeypatch.setattr(analysis_jobs, "analyse_ownership", broken)
+    analysis = start_analysis(
+        company_number="00445790",
+        transaction_ids=["t-2024"],
+        trading_name=None,
+        research=False,
+        settings=SETTINGS,
+    )
+    await _settle()
+
+    assert analysis.status == "done"
+    assert analysis.markdown is not None
+    assert analysis.ownership_markdown is None
+    assert "psc unavailable" in (analysis.ownership_error or "")
+
+
+async def test_ownership_reaches_the_comparison(fake_backends):
+    first = start_analysis(
+        company_number="00445790",
+        transaction_ids=["t-2024"],
+        trading_name=None,
+        research=False,
+        settings=SETTINGS,
+    )
+    second = start_analysis(
+        company_number="00989096",
+        transaction_ids=["t-2024"],
+        trading_name=None,
+        research=False,
+        settings=SETTINGS,
+    )
+    await _settle()
+    start_comparison(analyses=[first, second], guidance=None, settings=SETTINGS)
+    await _settle()
+
+    summaries = fake_backends["compare"][0]["summaries"]
+    assert all("Jane Holder, 60%." in s for s in summaries)
