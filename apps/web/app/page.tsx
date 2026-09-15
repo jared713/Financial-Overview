@@ -106,6 +106,11 @@ export default function Page() {
     }
   }
 
+  function clearSearch() {
+    setQuery("");
+    setHits(null);
+  }
+
   function removeCompany(companyNumber: string) {
     setPicked((current) => current.filter((p) => p.profile.company_number !== companyNumber));
   }
@@ -213,6 +218,7 @@ export default function Page() {
           query={query}
           onQueryChange={setQuery}
           onSearch={search}
+          onClearSearch={clearSearch}
           searching={searching}
           hits={hits}
           picked={picked}

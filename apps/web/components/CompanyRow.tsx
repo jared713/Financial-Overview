@@ -51,11 +51,13 @@ export function CompanyRow({
           type="button"
           onClick={() => onRemove(profile.company_number)}
           aria-label={`Remove ${profile.company_name}`}
-          className="shrink-0 rounded p-1 text-subtle hover:bg-canvas hover:text-red-600"
+          title={`Remove ${profile.company_name}`}
+          className="flex shrink-0 items-center gap-1 rounded-md border border-line px-1.5 py-1 text-xs text-muted shadow-btn transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-600 dark:hover:border-red-900 dark:hover:bg-red-950/40"
         >
-          <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+          <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
             <path d="M4 4l8 8M12 4l-8 8" />
           </svg>
+          Remove
         </button>
       </div>
 

@@ -10,6 +10,7 @@ export function SelectionRail({
   query,
   onQueryChange,
   onSearch,
+  onClearSearch,
   searching,
   hits,
   picked,
@@ -31,6 +32,7 @@ export function SelectionRail({
   query: string;
   onQueryChange: (value: string) => void;
   onSearch: () => void;
+  onClearSearch: () => void;
   searching: boolean;
   hits: CompanyHit[] | null;
   picked: Picked[];
@@ -59,15 +61,33 @@ export function SelectionRail({
           Add a company
         </label>
         <div className="mt-2 flex gap-2">
-          <input
-            id="company-search"
-            value={query}
-            onChange={(e) => onQueryChange(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && onSearch()}
-            placeholder="Name or number"
-            disabled={disabled}
-            className="input min-w-0 flex-1"
-          />
+          <div className="relative min-w-0 flex-1">
+            <input
+              id="company-search"
+              value={query}
+              onChange={(e) => onQueryChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onSearch();
+                if (e.key === "Escape") onClearSearch();
+              }}
+              placeholder="Name or number"
+              disabled={disabled}
+              className={`input ${query ? "pr-8" : ""}`}
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={onClearSearch}
+                aria-label="Clear search"
+                title="Clear search"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-subtle hover:bg-canvas hover:text-ink"
+              >
+                <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+                  <path d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+              </button>
+            )}
+          </div>
           <button
             type="button"
             onClick={onSearch}
@@ -84,7 +104,16 @@ export function SelectionRail({
         )}
 
         {hits !== null && (
-          <ul className="mt-3 max-h-64 overflow-y-auto rounded-md border border-line">
+          <div className="mt-3 overflow-hidden rounded-md border border-line">
+            <div className="flex items-center justify-between border-b border-line bg-canvas px-3 py-1.5">
+              <span className="text-xs text-muted">
+                {hits.length} {hits.length === 1 ? "result" : "results"}
+              </span>
+              <button type="button" onClick={onClearSearch} className="text-xs font-medium text-accent hover:underline">
+                Clear
+              </button>
+            </div>
+            <ul className="max-h-64 overflow-y-auto">
             {hits.length === 0 ? (
               <li className="px-3 py-2 text-xs text-muted">No companies matched.</li>
             ) : (
@@ -117,7 +146,8 @@ export function SelectionRail({
                 );
               })
             )}
-          </ul>
+            </ul>
+          </div>
         )}
       </div>
 
