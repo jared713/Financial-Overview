@@ -3,9 +3,10 @@
 Search UK companies at Companies House, pull their filed statutory accounts as PDFs,
 and have Claude review and compare them.
 
-Add up to **5 companies**, tick up to **4 years** of accounts for each, and Claude reads
-the actual filed PDFs: a review per company, then a cross-company comparison with a
-side-by-side table. Every filing also links to the raw PDF.
+Build a list in the left-hand rail — add up to **5 companies** and tick up to **4 years**
+of accounts for each — and Claude reads the actual filed PDFs. Results land in the right
+pane as tabs: a comparison with a side-by-side table, plus a review per company. Every
+filing also links to the raw PDF.
 
 Two passes, because five companies' accounts will not fit in one request:
 

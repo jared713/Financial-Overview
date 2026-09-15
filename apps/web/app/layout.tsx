@@ -12,7 +12,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <TopBar />
-        <main className="mx-auto w-full max-w-5xl px-5 py-8 sm:px-8">{children}</main>
+        {children}
       </body>
     </html>
   );

@@ -2,16 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Banner } from "@/components/Banner";
-import { CompanyCard } from "@/components/CompanyCard";
-import type { Picked } from "@/components/CompanyCard";
-import { ResultsPanel } from "@/components/ResultsPanel";
-import { StatusBadge } from "@/components/StatusBadge";
-import {
-  MAX_COMPANIES,
-  MAX_FILINGS_PER_COMPANY,
-  api,
-  estimateCost,
-} from "@/lib/api";
+import type { Picked } from "@/components/CompanyRow";
+import { ResultsPane } from "@/components/ResultsPane";
+import { SelectionRail } from "@/components/SelectionRail";
+import { MAX_COMPANIES, MAX_FILINGS_PER_COMPANY, api, estimateCost } from "@/lib/api";
 import type { AnalysisJob, CompanyHit, FilingFeatures } from "@/lib/api";
 
 const POLL_MS = 2500;
@@ -30,7 +24,6 @@ export default function Page() {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const resultsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api.filingFeatures().then(setFeatures).catch(() => setFeatures(null));
@@ -63,28 +56,30 @@ export default function Page() {
     if (picked.some((p) => p.profile.company_number === hit.company_number)) return;
     if (picked.length >= MAX_COMPANIES) return;
 
-    // Show the card immediately, fill in the filings when they arrive.
-    const placeholder: Picked = {
-      profile: {
-        company_number: hit.company_number,
-        company_name: hit.title,
-        company_status: hit.company_status,
-        company_type: hit.company_type,
-        sic_codes: [],
+    // Show the row immediately, fill in the filings when they arrive.
+    setPicked((current) => [
+      ...current,
+      {
+        profile: {
+          company_number: hit.company_number,
+          company_name: hit.title,
+          company_status: hit.company_status,
+          company_type: hit.company_type,
+          sic_codes: [],
+        },
+        filings: [],
+        selected: [],
+        loading: true,
       },
-      filings: [],
-      selected: [],
-      loading: true,
-    };
-    setPicked((current) => [...current, placeholder]);
+    ]);
 
     try {
       const [profile, filings] = await Promise.all([
         api.company(hit.company_number),
         api.companyFilings(hit.company_number),
       ]);
-      // Preselect the two most recent downloadable filings — enough for a
-      // year-on-year read per company; tick more for a longer trend.
+      // Preselect the two most recent years — enough for a year-on-year read;
+      // tick more for a longer trend.
       const selected = filings
         .filter((f) => f.downloadable)
         .slice(0, 2)
@@ -144,9 +139,6 @@ export default function Page() {
     try {
       const started = await api.startAnalysis(companies, question);
       setJob(started);
-      requestAnimationFrame(() =>
-        resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
-      );
       pollRef.current = setInterval(async () => {
         try {
           const next = await api.analysis(started.id);
@@ -166,9 +158,9 @@ export default function Page() {
 
   const claudeOff = features !== null && !features.claude_review;
   const chOff = features !== null && !features.companies_house;
-  const readyCompanies = picked.filter((p) => p.selected.length > 0);
-  const filingCount = readyCompanies.reduce((n, p) => n + p.selected.length, 0);
-  const pageCount = readyCompanies.reduce(
+  const ready = picked.filter((p) => p.selected.length > 0);
+  const filingCount = ready.reduce((n, p) => n + p.selected.length, 0);
+  const pageCount = ready.reduce(
     (n, p) =>
       n +
       p.filings
@@ -179,153 +171,69 @@ export default function Page() {
   const cost = estimateCost(pageCount, features?.model);
   const busy = job?.status === "running" || starting;
 
+  const summary =
+    ready.length === 0
+      ? "Pick at least one year of accounts."
+      : [
+          `${ready.length} ${ready.length === 1 ? "company" : "companies"}`,
+          `${filingCount} ${filingCount === 1 ? "filing" : "filings"}`,
+          pageCount > 0 ? `${pageCount} pages` : null,
+          cost ? `${cost} estimated` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ");
+
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="page-title">UK company accounts</h1>
-        <p className="page-subtitle">
-          Pick up to {MAX_COMPANIES} companies and the years you want. Claude reviews each
-          company from its filed accounts, then compares them.
-        </p>
-      </header>
-
-      {chOff && (
-        <Banner tone="red">
-          <code className="font-mono text-xs">COMPANIES_HOUSE_API_KEY</code> is not set on
-          the API service, so search and downloads are unavailable.
-        </Banner>
-      )}
-      {claudeOff && !chOff && (
-        <Banner tone="amber">
-          <code className="font-mono text-xs">ANTHROPIC_API_KEY</code> is not set on the
-          API service. Filings can be searched and downloaded, but Claude review is
-          switched off.
-        </Banner>
-      )}
-
-      <section className="card">
-        <div className="card-body">
-          <label className="label" htmlFor="company-search">
-            Add a company
-          </label>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <input
-              id="company-search"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && search()}
-              placeholder="Name or number — e.g. Tesco PLC or 00445790"
-              className="input min-w-[16rem] flex-1"
-            />
-            <button
-              type="button"
-              onClick={search}
-              disabled={searching || !query.trim()}
-              className="btn-primary"
-            >
-              {searching ? "Searching…" : "Search"}
-            </button>
-          </div>
-        </div>
-
-        {hits !== null && (
-          <div className="border-t border-line">
-            {hits.length === 0 ? (
-              <p className="px-5 py-4 text-sm text-muted">No companies matched that search.</p>
-            ) : (
-              <ul>
-                {hits.map((hit) => {
-                  const added = picked.some(
-                    (p) => p.profile.company_number === hit.company_number,
-                  );
-                  const full = picked.length >= MAX_COMPANIES;
-                  return (
-                    <li
-                      key={hit.company_number}
-                      className="flex items-center justify-between gap-4 border-b border-line px-5 py-3 last:border-b-0"
-                    >
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm font-medium text-ink">
-                          {hit.title}
-                        </span>
-                        {hit.address_snippet && (
-                          <span className="block truncate text-xs text-muted">
-                            {hit.address_snippet}
-                          </span>
-                        )}
-                      </span>
-                      <span className="flex shrink-0 items-center gap-3">
-                        <StatusBadge status={hit.company_status} />
-                        <span className="num text-xs text-muted">{hit.company_number}</span>
-                        <button
-                          type="button"
-                          onClick={() => addCompany(hit)}
-                          disabled={added || full}
-                          className="btn-secondary"
-                        >
-                          {added ? "Added" : "Add"}
-                        </button>
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        )}
-      </section>
-
-      {error && <Banner tone="red">{error}</Banner>}
-
-      {picked.map((p) => (
-        <CompanyCard
-          key={p.profile.company_number}
-          picked={p}
-          onToggleFiling={toggleFiling}
+    <div className="lg:grid lg:grid-cols-[22rem_minmax(0,1fr)]">
+      <aside className="border-b border-line bg-surface lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] lg:overflow-hidden lg:border-b-0 lg:border-r">
+        <SelectionRail
+          query={query}
+          onQueryChange={setQuery}
+          onSearch={search}
+          searching={searching}
+          hits={hits}
+          picked={picked}
+          onAdd={addCompany}
           onRemove={removeCompany}
+          onToggleFiling={toggleFiling}
+          question={question}
+          onQuestionChange={setQuestion}
+          onRun={run}
+          busy={busy}
+          canRun={ready.length > 0 && !claudeOff}
+          summary={summary}
+          disabled={chOff}
         />
-      ))}
+      </aside>
 
-      {picked.length > 0 && (
-        <section className="card card-body space-y-3">
-          <div>
-            <label className="label" htmlFor="question">
-              Optional question for Claude
-            </label>
-            <textarea
-              id="question"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              rows={2}
-              placeholder="e.g. Which of these has the strongest balance sheet, and why?"
-              className="input mt-2 resize-y"
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={run}
-              disabled={busy || readyCompanies.length === 0 || claudeOff}
-              className="btn-primary"
-            >
-              {busy
-                ? "Reviewing…"
-                : readyCompanies.length > 1
-                  ? `Review and compare ${readyCompanies.length} companies`
-                  : "Review with Claude"}
-            </button>
-            <span className="text-xs text-muted">
-              {readyCompanies.length}
-              {readyCompanies.length === 1 ? " company" : " companies"} · {filingCount}
-              {filingCount === 1 ? " filing" : " filings"}
-              {pageCount > 0 && ` · ${pageCount} pages`}
-              {cost && ` · ${cost} estimated`}
-            </span>
-          </div>
-        </section>
-      )}
+      <main className="min-w-0 space-y-4 px-5 py-6 sm:px-8">
+        {/* Cap the reading width so tables and prose stay legible on wide screens. */}
+        <div className="mx-auto w-full max-w-5xl space-y-4">
+        <header>
+          <h1 className="page-title">UK company accounts</h1>
+          <p className="page-subtitle">
+            Claude reviews each company from its filed accounts, then compares them.
+          </p>
+        </header>
 
-      <div ref={resultsRef}>{job && <ResultsPanel job={job} />}</div>
+        {chOff && (
+          <Banner tone="red">
+            <code className="font-mono text-xs">COMPANIES_HOUSE_API_KEY</code> is not set
+            on the API service, so search and downloads are unavailable.
+          </Banner>
+        )}
+        {claudeOff && !chOff && (
+          <Banner tone="amber">
+            <code className="font-mono text-xs">ANTHROPIC_API_KEY</code> is not set on the
+            API service. Filings can be searched and downloaded, but Claude review is
+            switched off.
+          </Banner>
+        )}
+        {error && <Banner tone="red">{error}</Banner>}
+
+        <ResultsPane job={job} />
+        </div>
+      </main>
     </div>
   );
 }
