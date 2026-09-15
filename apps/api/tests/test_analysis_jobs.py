@@ -5,6 +5,8 @@ from app.services import analysis_jobs
 from app.services.analysis_jobs import (
     AnalysisJob,
     CompanyRun,
+    Selection,
+    _registered_office,
     _select_filings,
     create_job,
     run_job,
@@ -13,6 +15,7 @@ from app.services.companies_house import CompaniesHouseError, Filing, FilingDocu
 from app.services.filing_analysis import (
     AnalysisResult,
     CompanySummary,
+    FilingAnalysisError,
     build_comparison_content,
 )
 
@@ -108,7 +111,10 @@ def fake_backends(monkeypatch):
 
 
 async def test_run_job_summarises_each_company_then_compares(fake_backends):
-    selections = [("00445790", ["t-2024", "t-2023"]), ("00989096", ["t-2024"])]
+    selections = [
+        Selection("00445790", ["t-2024", "t-2023"]),
+        Selection("00989096", ["t-2024"]),
+    ]
     job = create_job(selections, question="Who is stronger?")
     await run_job(job, selections, SETTINGS)
 
@@ -125,7 +131,7 @@ async def test_run_job_summarises_each_company_then_compares(fake_backends):
 
 
 async def test_single_company_run_skips_comparison(fake_backends):
-    selections = [("00445790", ["t-2024"])]
+    selections = [Selection("00445790", ["t-2024"])]
     job = create_job(selections, question=None)
     await run_job(job, selections, SETTINGS)
 
@@ -143,7 +149,7 @@ async def test_one_failing_company_does_not_sink_the_run(monkeypatch, fake_backe
             return FILINGS
 
     monkeypatch.setattr(analysis_jobs, "CompaniesHouseClient", HalfBrokenClient)
-    selections = [("00445790", ["t-2024"]), ("99999999", ["t-2024"])]
+    selections = [Selection("00445790", ["t-2024"]), Selection("99999999", ["t-2024"])]
     job = create_job(selections, question=None)
     await run_job(job, selections, SETTINGS)
 
@@ -157,9 +163,9 @@ async def test_one_failing_company_does_not_sink_the_run(monkeypatch, fake_backe
 
 
 async def test_job_reports_progress(fake_backends):
-    selections = [("00445790", ["t-2024"]), ("00989096", ["t-2024"])]
+    selections = [Selection("00445790", ["t-2024"]), Selection("00989096", ["t-2024"])]
     job = AnalysisJob(
-        id="x", companies=[CompanyRun(company_number=n) for n, _ in selections]
+        id="x", companies=[CompanyRun(company_number=s.company_number) for s in selections]
     )
     assert job.finished_companies == 0
     await run_job(job, selections, SETTINGS)
@@ -175,10 +181,9 @@ def test_analyses_endpoints(monkeypatch):
 
     started: list[tuple] = []
 
-    def fake_start(selections, question, settings):
-        started.append((selections, question))
-        job = create_job(selections, question)
-        return job
+    def fake_start(selections, question, settings, research=False):
+        started.append((selections, question, research))
+        return create_job(selections, question, research)
 
     monkeypatch.setattr(analyses_router, "start_job", fake_start)
     monkeypatch.setattr(
@@ -194,6 +199,7 @@ def test_analyses_endpoints(monkeypatch):
                 {"company_number": "00989096", "transaction_ids": ["t-2024", "t-2023"]},
             ],
             "question": "Who is stronger?",
+            "research": True,
         },
     )
     assert resp.status_code == 202
@@ -201,9 +207,14 @@ def test_analyses_endpoints(monkeypatch):
     assert body["total"] == 2
     assert body["finished"] == 0
     assert [c["company_number"] for c in body["companies"]] == ["00445790", "00989096"]
-    assert started == [
-        ([("00445790", ["t-2024"]), ("00989096", ["t-2024", "t-2023"])], "Who is stronger?")
+    selections, question, research = started[0]
+    assert [(s.company_number, s.transaction_ids) for s in selections] == [
+        ("00445790", ["t-2024"]),
+        ("00989096", ["t-2024", "t-2023"]),
     ]
+    assert question == "Who is stronger?"
+    assert research is True
+    assert body["research"] is True
 
     read = client.get(f"/analyses/{body['id']}")
     assert read.status_code == 200
@@ -251,3 +262,111 @@ def test_analyses_caps_company_count(monkeypatch):
         },
     )
     assert resp.status_code == 422
+
+
+def test_registered_office_joins_the_parts_that_exist():
+    assert _registered_office(
+        {"registered_office_address": {"address_line_1": "Tesco House",
+                                       "locality": "Welwyn Garden City",
+                                       "postal_code": "AL7 1GA"}}
+    ) == "Tesco House, Welwyn Garden City, AL7 1GA"
+    assert _registered_office({}) is None
+
+
+def test_build_research_prompt_carries_identity_and_accounts():
+    from app.services.company_research import build_research_prompt
+
+    prompt = build_research_prompt(
+        company_name="ONMO LIMITED",
+        company_number="11563518",
+        trading_name="Onmo",
+        registered_office="1 Fore Street, London",
+        sic_codes=["64191"],
+        filings_review="## Filing\nSmall company accounts.",
+    )
+    assert "11563518" in prompt
+    assert "Trading name: Onmo" in prompt
+    assert "1 Fore Street, London" in prompt
+    assert "64191" in prompt
+    assert "Small company accounts." in prompt
+    assert "## Revenue model" in prompt
+    assert "## Recent news" in prompt
+
+
+def test_build_research_prompt_without_optional_context():
+    from app.services.company_research import build_research_prompt
+
+    prompt = build_research_prompt(
+        company_name="ACME LTD",
+        company_number="00000001",
+        trading_name=None,
+        registered_office=None,
+        sic_codes=[],
+        filings_review=None,
+    )
+    assert "Trading name" not in prompt
+    assert "SIC codes" not in prompt
+    assert "## Sources" in prompt
+
+
+async def test_research_runs_per_company_and_feeds_the_comparison(monkeypatch, fake_backends):
+    researched: list[tuple[str, str | None]] = []
+
+    async def fake_research(**kwargs):
+        researched.append((kwargs["company_number"], kwargs["trading_name"]))
+        return AnalysisResult(
+            markdown="## Revenue model\nThey sell widgets.",
+            model="claude-test",
+            input_tokens=20,
+            output_tokens=5,
+        )
+
+    compared: list[str] = []
+
+    async def fake_compare(summaries, **kwargs):
+        compared.extend(s.markdown for s in summaries)
+        assert kwargs["with_research"] is True
+        return AnalysisResult(markdown="the comparison", model="claude-test")
+
+    monkeypatch.setattr(analysis_jobs, "research_company", fake_research)
+    monkeypatch.setattr(analysis_jobs, "compare_companies", fake_compare)
+
+    selections = [
+        Selection("00445790", ["t-2024"], trading_name="Tesco"),
+        Selection("00989096", ["t-2024"]),
+    ]
+    job = create_job(selections, question=None, research=True)
+    await run_job(job, selections, SETTINGS)
+
+    assert researched == [("00445790", "Tesco"), ("00989096", None)]
+    assert job.companies[0].research_markdown == "## Revenue model\nThey sell widgets."
+    # The comparison sees the research alongside the accounts review.
+    assert all("They sell widgets." in m for m in compared)
+
+
+async def test_research_failure_leaves_the_accounts_review_intact(monkeypatch, fake_backends):
+    async def broken_research(**kwargs):
+        raise FilingAnalysisError("Claude web research failed: boom", 502)
+
+    monkeypatch.setattr(analysis_jobs, "research_company", broken_research)
+
+    selections = [Selection("00445790", ["t-2024"])]
+    job = create_job(selections, question=None, research=True)
+    await run_job(job, selections, SETTINGS)
+
+    run = job.companies[0]
+    assert run.status == "done"
+    assert run.markdown is not None
+    assert run.research_markdown is None
+    assert "boom" in (run.research_error or "")
+
+
+async def test_research_is_skipped_when_not_requested(monkeypatch, fake_backends):
+    async def fail(**kwargs):
+        raise AssertionError("research should not run")
+
+    monkeypatch.setattr(analysis_jobs, "research_company", fail)
+    selections = [Selection("00445790", ["t-2024"])]
+    job = create_job(selections, question=None, research=False)
+    await run_job(job, selections, SETTINGS)
+    assert job.companies[0].research_markdown is None

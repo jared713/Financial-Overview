@@ -60,6 +60,23 @@ column per period, a trajectory read, comparability flags, and watch-outs.
 **Across companies** (two or more selected) → a side-by-side table using each company's
 most recent period, how they compare, standouts, comparability caveats, and watch-outs.
 
+**Web research** (optional, per run). A second pass per company using Claude's
+server-side `web_search` and `web_fetch` tools:
+
+- *What they do* — the business in plain terms, and how confident Claude is that it found
+  the right company. UK trading names collide constantly, so it is told to confirm the
+  site against the company number, registered office or filed name, and to say so when it
+  cannot.
+- *Revenue model* — the revenue streams it can evidence, each marked as from the filings
+  or from the web, and whether the accounts support the picture the website paints.
+- *Recent news* — roughly the last 18 months, dated and attributed.
+- *Sources* — title and URL for each.
+
+Most businesses are known online by something other than their registered name, so each
+company has a **Trades under a different name** field; it is passed to the research pass
+as the name to search for. With research on, the comparison also gains a *How they make
+money* section.
+
 Limits: **5 companies**, **4 years each**, and 20MB of PDF per company. You can add a
 free-text question, answered in an extra section of the comparison.
 
@@ -73,8 +90,13 @@ free-text question, answered in an extra section of the comparison.
   visually, but figures from a poor scan deserve a check against the source PDF.
 - Accounts are filed up to 9 months after period end, so the most recent filing is
   usually 9–21 months behind today.
-- A long analysis run (5–6 filings) can take a couple of minutes; the button shows
-  elapsed seconds while it works.
+- A long analysis run (5–6 filings) can take a couple of minutes; the page shows progress
+  per company while it works.
+- Web research adds time and cost per company: a handful of searches and page fetches,
+  billed on top of the tokens. It is off by default for that reason.
+- Research quality varies wildly by company. A listed plc is well covered; a small private
+  company may have no website and no coverage at all, and Claude will say so rather than
+  invent something.
 
 ## 6. API reference
 

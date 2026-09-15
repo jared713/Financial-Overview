@@ -57,11 +57,14 @@ export type CompanyRun = {
   filings: AnalysedFiling[];
   markdown?: string | null;
   error?: string | null;
+  research_markdown?: string | null;
+  research_error?: string | null;
 };
 
 export type AnalysisJob = {
   id: string;
   status: "running" | "done" | "error";
+  research: boolean;
   companies: CompanyRun[];
   finished: number;
   total: number;
@@ -116,14 +119,20 @@ export const api = {
   companyFilings: (companyNumber: string) =>
     apiFetch<Filing[]>(`/companies/${companyNumber}/filings`),
   startAnalysis: (
-    companies: { company_number: string; transaction_ids: string[] }[],
+    companies: {
+      company_number: string;
+      transaction_ids: string[];
+      trading_name?: string | null;
+    }[],
     question?: string,
+    research = false,
   ) =>
     apiFetch<AnalysisJob>("/analyses", {
       method: "POST",
       body: JSON.stringify({
         companies,
         question: question?.trim() ? question.trim() : null,
+        research,
       }),
     }),
   analysis: (jobId: string) => apiFetch<AnalysisJob>(`/analyses/${jobId}`),

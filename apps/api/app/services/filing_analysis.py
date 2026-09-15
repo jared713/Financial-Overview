@@ -275,6 +275,16 @@ a company whose figures are largely undisclosed.
 ## Watch-outs
 The three to five things you would want answered before relying on this comparison."""
 
+CROSS_COMPANY_BUSINESS_SECTION = """
+
+Insert this section immediately after "How they compare":
+
+## How they make money
+Compare the revenue models described in the reviews: what each company sells, to whom, \
+and how that shows up (or fails to show up) in the filed figures. Say which models look \
+more durable and why. Where a review could not confirm a company's online presence, say \
+so rather than guessing at its model."""
+
 
 @dataclass
 class CompanySummary:
@@ -286,7 +296,9 @@ class CompanySummary:
 
 
 def build_comparison_content(
-    summaries: list[CompanySummary], question: str | None = None
+    summaries: list[CompanySummary],
+    question: str | None = None,
+    with_research: bool = False,
 ) -> list[dict[str, Any]]:
     blocks: list[dict[str, Any]] = [
         {
@@ -309,6 +321,8 @@ def build_comparison_content(
             }
         )
     instructions = CROSS_COMPANY_INSTRUCTIONS.format(count=len(summaries))
+    if with_research:
+        instructions += CROSS_COMPANY_BUSINESS_SECTION
     if question:
         instructions += (
             "\n\n## Answering the specific question\n"
@@ -326,6 +340,7 @@ async def compare_companies(
     model: str,
     max_tokens: int = 8000,
     question: str | None = None,
+    with_research: bool = False,
 ) -> AnalysisResult:
     """Second pass: one comparison across the per-company reviews."""
     if not api_key:
@@ -346,7 +361,10 @@ async def compare_companies(
             max_tokens=max_tokens,
             system=CROSS_COMPANY_SYSTEM_PROMPT,
             messages=[
-                {"role": "user", "content": build_comparison_content(summaries, question)}
+                {
+                    "role": "user",
+                    "content": build_comparison_content(summaries, question, with_research),
+                }
             ],
         )
     except Exception as e:

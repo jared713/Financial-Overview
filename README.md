@@ -8,12 +8,23 @@ of accounts for each — and Claude reads the actual filed PDFs. Results land in
 pane as tabs: a comparison with a side-by-side table, plus a review per company. Every
 filing also links to the raw PDF.
 
-Two passes, because five companies' accounts will not fit in one request:
+Tick **Research online** and each company gets a second pass over the open web —
+what it actually does, how it makes money, and recent news — cross-checked against the
+filed figures. Because businesses are usually known online by something other than their
+registered name, each company has a **Trades under a different name** box; fill it in and
+the search keys off that instead.
+
+Two passes over the accounts, because five companies' filings will not fit in one
+request:
 
 1. **Per company** — that company's selected filings go up together, so the review reads
    year on year within the company.
 2. **Across companies** — the per-company reviews (not the PDFs again) go up for the
    comparison, which keeps the request small and the figures consistent.
+
+Web research, when enabled, is a third call per company, made after its accounts review
+so it can be grounded in the filed figures. It uses Claude's server-side `web_search` and
+`web_fetch` tools — no scraping to run or maintain.
 
 Runs are asynchronous: the API returns a job id and the page renders each company's
 review as it lands.
@@ -34,7 +45,7 @@ apps/
       routers/       /companies, /analyses
       schemas/       Pydantic response models
       services/      Companies House client, Claude filing analysis,
-                     multi-company run jobs
+                     web research, multi-company run jobs
     tests/
   web/         Next.js app
     app/             the search + review page
@@ -74,7 +85,7 @@ cd apps/web && npm install && npm run dev
 | GET | `/companies/{number}` | Company profile |
 | GET | `/companies/{number}/filings` | Accounts filings, newest first |
 | GET | `/companies/{number}/filings/{transaction_id}/pdf` | The filed PDF |
-| POST | `/analyses` | Start a run: `{companies: [{company_number, transaction_ids}], question?}` → job |
+| POST | `/analyses` | Start a run: `{companies: [{company_number, transaction_ids, trading_name?}], question?, research?}` → job |
 | GET | `/analyses/{job_id}` | Poll a run: per-company reviews plus the comparison |
 | POST | `/companies/{number}/analyse` | Single company, synchronous → Markdown review |
 

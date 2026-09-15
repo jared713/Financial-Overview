@@ -9,7 +9,7 @@ from app.schemas.companies import (
     AnalysisRequest,
     CompanyRunOut,
 )
-from app.services.analysis_jobs import AnalysisJob, get_job, start_job
+from app.services.analysis_jobs import AnalysisJob, Selection, get_job, start_job
 
 log = logging.getLogger("financial-overview.analyses")
 
@@ -20,6 +20,7 @@ def _out(job: AnalysisJob) -> AnalysisJobOut:
     return AnalysisJobOut(
         id=job.id,
         status=job.status,
+        research=job.research,
         companies=[
             CompanyRunOut(
                 company_number=run.company_number,
@@ -37,6 +38,8 @@ def _out(job: AnalysisJob) -> AnalysisJobOut:
                 ],
                 markdown=run.markdown,
                 error=run.error,
+                research_markdown=run.research_markdown,
+                research_error=run.research_error,
             )
             for run in job.companies
         ],
@@ -54,8 +57,9 @@ def _out(job: AnalysisJob) -> AnalysisJobOut:
 async def start_analysis(payload: AnalysisRequest) -> AnalysisJobOut:
     """Kick off a review of one or more companies; poll GET /analyses/{id} for it.
 
-    Each company is summarised from its own filings, then — with two or more —
-    the summaries are compared.
+    Each company is summarised from its own filings and, when `research` is set,
+    profiled from the open web too. With two or more companies the results are
+    then compared.
     """
     settings = get_settings()
     if not settings.companies_house_api_key:
@@ -68,15 +72,27 @@ async def start_analysis(payload: AnalysisRequest) -> AnalysisJobOut:
         )
 
     seen: set[str] = set()
-    selections: list[tuple[str, list[str]]] = []
+    selections: list[Selection] = []
     for item in payload.companies:
         if item.company_number in seen:
             raise HTTPException(400, f"Company {item.company_number} selected twice")
         seen.add(item.company_number)
-        selections.append((item.company_number, item.transaction_ids))
+        trading_name = (item.trading_name or "").strip() or None
+        selections.append(
+            Selection(
+                company_number=item.company_number,
+                transaction_ids=item.transaction_ids,
+                trading_name=trading_name,
+            )
+        )
 
-    job = start_job(selections, payload.question, settings)
-    log.info("Started analysis %s for %d companies", job.id, len(selections))
+    job = start_job(selections, payload.question, settings, payload.research)
+    log.info(
+        "Started analysis %s for %d companies (research=%s)",
+        job.id,
+        len(selections),
+        payload.research,
+    )
     return _out(job)
 
 

@@ -19,6 +19,7 @@ export default function Page() {
 
   const [picked, setPicked] = useState<Picked[]>([]);
   const [question, setQuestion] = useState("");
+  const [research, setResearch] = useState(false);
 
   const [job, setJob] = useState<AnalysisJob | null>(null);
   const [starting, setStarting] = useState(false);
@@ -70,6 +71,8 @@ export default function Page() {
         filings: [],
         selected: [],
         loading: true,
+        tradingNameOn: false,
+        tradingName: "",
       },
     ]);
 
@@ -87,7 +90,7 @@ export default function Page() {
       setPicked((current) =>
         current.map((p) =>
           p.profile.company_number === hit.company_number
-            ? { profile, filings, selected, loading: false }
+            ? { ...p, profile, filings, selected, loading: false }
             : p,
         ),
       );
@@ -123,12 +126,32 @@ export default function Page() {
     );
   }
 
+  function toggleTradingName(companyNumber: string) {
+    setPicked((current) =>
+      current.map((p) =>
+        p.profile.company_number === companyNumber
+          ? { ...p, tradingNameOn: !p.tradingNameOn }
+          : p,
+      ),
+    );
+  }
+
+  function setTradingName(companyNumber: string, value: string) {
+    setPicked((current) =>
+      current.map((p) =>
+        p.profile.company_number === companyNumber ? { ...p, tradingName: value } : p,
+      ),
+    );
+  }
+
   async function run() {
     const companies = picked
       .filter((p) => p.selected.length > 0)
       .map((p) => ({
         company_number: p.profile.company_number,
         transaction_ids: p.selected,
+        trading_name:
+          p.tradingNameOn && p.tradingName.trim() ? p.tradingName.trim() : null,
       }));
     if (companies.length === 0) return;
 
@@ -137,7 +160,7 @@ export default function Page() {
     setJob(null);
     stopPolling();
     try {
-      const started = await api.startAnalysis(companies, question);
+      const started = await api.startAnalysis(companies, question, research);
       setJob(started);
       pollRef.current = setInterval(async () => {
         try {
@@ -178,7 +201,7 @@ export default function Page() {
           `${ready.length} ${ready.length === 1 ? "company" : "companies"}`,
           `${filingCount} ${filingCount === 1 ? "filing" : "filings"}`,
           pageCount > 0 ? `${pageCount} pages` : null,
-          cost ? `${cost} estimated` : null,
+          cost ? `${cost} estimated${research ? " + web research" : ""}` : null,
         ]
           .filter(Boolean)
           .join(" · ");
@@ -196,6 +219,10 @@ export default function Page() {
           onAdd={addCompany}
           onRemove={removeCompany}
           onToggleFiling={toggleFiling}
+          onToggleTradingName={toggleTradingName}
+          onTradingNameChange={setTradingName}
+          research={research}
+          onResearchChange={setResearch}
           question={question}
           onQuestionChange={setQuestion}
           onRun={run}

@@ -118,9 +118,24 @@ export function ResultsPane({ job }: { job: AnalysisJob | null }) {
                   subtitle={active.filings
                     .map((f) => `${f.made_up_to ?? f.date} (${fmtBytes(f.size_bytes)})`)
                     .join(" · ")}
-                  text={active.markdown}
+                  text={
+                    active.research_markdown
+                      ? `${active.markdown}\n\n${active.research_markdown}`
+                      : active.markdown
+                  }
                 />
                 <Markdown>{active.markdown}</Markdown>
+                {active.research_markdown && (
+                  <div className="mt-6 border-t border-line pt-5">
+                    <p className="label mb-3">From the web</p>
+                    <Markdown>{active.research_markdown}</Markdown>
+                  </div>
+                )}
+                {active.research_error && (
+                  <p className="mt-6 border-t border-line pt-5 text-sm text-amber-700 dark:text-amber-300">
+                    Web research unavailable: {active.research_error}
+                  </p>
+                )}
               </>
             ) : active.status === "error" ? (
               <p className="text-sm text-red-600">{active.error}</p>

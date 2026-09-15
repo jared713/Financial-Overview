@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 
 from app.config import Settings
 from app.services.companies_house import CompaniesHouseClient, CompaniesHouseError, Filing
+from app.services.company_research import research_company
 from app.services.filing_analysis import (
     CompanySummary,
     FilingAnalysisError,
@@ -35,6 +36,18 @@ MAX_FILINGS_PER_COMPANY = 4
 # stacking concurrent Anthropic requests or hammering Companies House.
 COMPANY_CONCURRENCY = 2
 JOB_TTL_SECONDS = 2 * 60 * 60
+
+
+@dataclass
+class Selection:
+    """One company as chosen in the UI."""
+
+    company_number: str
+    transaction_ids: list[str]
+    # Companies trade under names that differ from the registered one far more
+    # often than not; without it the web research finds the wrong business or
+    # nothing at all.
+    trading_name: str | None = None
 
 
 @dataclass
@@ -54,6 +67,8 @@ class CompanyRun:
     filings: list[AnalysedFilingRef] = field(default_factory=list)
     markdown: str | None = None
     error: str | None = None
+    research_markdown: str | None = None
+    research_error: str | None = None
 
 
 @dataclass
@@ -62,6 +77,7 @@ class AnalysisJob:
     status: str = "running"  # running | done | error
     created_at: float = field(default_factory=time.time)
     question: str | None = None
+    research: bool = False
     companies: list[CompanyRun] = field(default_factory=list)
     comparison_markdown: str | None = None
     comparison_error: str | None = None
@@ -88,12 +104,15 @@ def get_job(job_id: str) -> AnalysisJob | None:
     return _jobs.get(job_id)
 
 
-def create_job(selections: list[tuple[str, list[str]]], question: str | None) -> AnalysisJob:
+def create_job(
+    selections: list[Selection], question: str | None, research: bool = False
+) -> AnalysisJob:
     _prune()
     job = AnalysisJob(
         id=uuid.uuid4().hex,
         question=question,
-        companies=[CompanyRun(company_number=number) for number, _ in selections],
+        research=research,
+        companies=[CompanyRun(company_number=s.company_number) for s in selections],
     )
     _jobs[job.id] = job
     return job
@@ -110,9 +129,19 @@ def _select_filings(all_filings: list[Filing], transaction_ids: list[str]) -> li
     return sorted((by_id[t] for t in transaction_ids), key=lambda f: f.date or "")
 
 
+def _registered_office(profile: dict) -> str | None:
+    address = profile.get("registered_office_address") or {}
+    parts = [
+        str(address[key])
+        for key in ("address_line_1", "address_line_2", "locality", "region", "postal_code")
+        if address.get(key)
+    ]
+    return ", ".join(parts) or None
+
+
 async def _run_company(
     run: CompanyRun,
-    transaction_ids: list[str],
+    selection: Selection,
     settings: Settings,
     question: str | None,
     job: AnalysisJob,
@@ -121,7 +150,7 @@ async def _run_company(
     try:
         client = CompaniesHouseClient(settings.companies_house_api_key or "")
         all_filings = await client.list_account_filings(run.company_number, limit=100)
-        filings = _select_filings(all_filings, transaction_ids)
+        filings = _select_filings(all_filings, selection.transaction_ids)
         profile = await client.get_company(run.company_number)
         run.company_name = profile.get("company_name") or run.company_number
         documents = await client.fetch_filing_documents(filings)
@@ -148,14 +177,42 @@ async def _run_company(
             question=question if len(job.companies) == 1 else None,
         )
         run.markdown = result.markdown
-        run.status = "done"
         job.model = result.model
         job.input_tokens += result.input_tokens or 0
         job.output_tokens += result.output_tokens or 0
+
+        # Web research runs after the filings review so it can be grounded in the
+        # filed figures. A failure here does not fail the company — the accounts
+        # review stands on its own.
+        if job.research:
+            try:
+                research = await research_company(
+                    company_name=run.company_name,
+                    company_number=run.company_number,
+                    trading_name=selection.trading_name,
+                    registered_office=_registered_office(profile),
+                    sic_codes=[str(c) for c in (profile.get("sic_codes") or [])],
+                    filings_review=result.markdown,
+                    api_key=settings.anthropic_api_key,
+                    model=settings.anthropic_model,
+                )
+                run.research_markdown = research.markdown
+                job.input_tokens += research.input_tokens or 0
+                job.output_tokens += research.output_tokens or 0
+            except FilingAnalysisError as e:
+                run.research_error = str(e)
+            except Exception as e:
+                log.exception("Research failed for %s", run.company_number)
+                run.research_error = f"Unexpected error: {e}"
+
+        run.status = "done"
+        summary = result.markdown
+        if run.research_markdown:
+            summary = f"{summary}\n\n### Business and recent news\n\n{run.research_markdown}"
         return CompanySummary(
             company_number=run.company_number,
             company_name=run.company_name,
-            markdown=result.markdown,
+            markdown=summary,
         )
     except (CompaniesHouseError, FilingAnalysisError) as e:
         run.status = "error"
@@ -168,20 +225,20 @@ async def _run_company(
 
 
 async def run_job(
-    job: AnalysisJob, selections: list[tuple[str, list[str]]], settings: Settings
+    job: AnalysisJob, selections: list[Selection], settings: Settings
 ) -> None:
     """Summarise each company concurrently, then compare the summaries."""
     semaphore = asyncio.Semaphore(COMPANY_CONCURRENCY)
 
-    async def _one(run: CompanyRun, transaction_ids: list[str]) -> CompanySummary | None:
+    async def _one(run: CompanyRun, selection: Selection) -> CompanySummary | None:
         async with semaphore:
-            return await _run_company(run, transaction_ids, settings, job.question, job)
+            return await _run_company(run, selection, settings, job.question, job)
 
     try:
         summaries = await asyncio.gather(
             *(
-                _one(run, transaction_ids)
-                for run, (_, transaction_ids) in zip(job.companies, selections, strict=True)
+                _one(run, selection)
+                for run, selection in zip(job.companies, selections, strict=True)
             )
         )
         done = [s for s in summaries if s is not None]
@@ -194,6 +251,7 @@ async def run_job(
                     model=settings.anthropic_model,
                     max_tokens=settings.anthropic_max_tokens,
                     question=job.question,
+                    with_research=job.research,
                 )
                 job.comparison_markdown = comparison.markdown
                 job.model = comparison.model
@@ -214,8 +272,11 @@ async def run_job(
 
 
 def start_job(
-    selections: list[tuple[str, list[str]]], question: str | None, settings: Settings
+    selections: list[Selection],
+    question: str | None,
+    settings: Settings,
+    research: bool = False,
 ) -> AnalysisJob:
-    job = create_job(selections, question)
+    job = create_job(selections, question, research)
     asyncio.create_task(run_job(job, selections, settings))
     return job

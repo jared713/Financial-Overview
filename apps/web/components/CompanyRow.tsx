@@ -12,16 +12,25 @@ export type Picked = {
   selected: string[];
   loading: boolean;
   error?: string;
+  tradingNameOn: boolean;
+  tradingName: string;
 };
 
 export function CompanyRow({
   picked,
   onToggleFiling,
   onRemove,
+  onToggleTradingName,
+  onTradingNameChange,
+  showTradingName,
 }: {
   picked: Picked;
   onToggleFiling: (companyNumber: string, transactionId: string) => void;
   onRemove: (companyNumber: string) => void;
+  onToggleTradingName: (companyNumber: string) => void;
+  onTradingNameChange: (companyNumber: string, value: string) => void;
+  /** Only relevant when web research is on — it is what the search keys off. */
+  showTradingName: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const { profile, filings, selected } = picked;
@@ -72,6 +81,30 @@ export function CompanyRow({
             >
               {open ? "Hide filings" : `${filings.length} filings · PDFs`}
             </button>
+            {showTradingName && (
+              <div className="mt-2.5">
+                <label className="flex items-center gap-1.5 text-xs text-muted">
+                  <input
+                    type="checkbox"
+                    checked={picked.tradingNameOn}
+                    onChange={() => onToggleTradingName(profile.company_number)}
+                    className="checkbox"
+                  />
+                  Trades under a different name
+                </label>
+                {picked.tradingNameOn && (
+                  <input
+                    value={picked.tradingName}
+                    onChange={(e) =>
+                      onTradingNameChange(profile.company_number, e.target.value)
+                    }
+                    placeholder="Name used online"
+                    aria-label={`Trading name for ${profile.company_name}`}
+                    className="input mt-1.5 text-xs"
+                  />
+                )}
+              </div>
+            )}
             {open && (
               <ul className="mt-1.5 space-y-1 border-l border-line pl-2.5">
                 {filings.map((f) => (
