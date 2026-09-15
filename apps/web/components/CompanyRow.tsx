@@ -25,7 +25,6 @@ export function CompanyRow({
   onRemove,
   onToggleTradingName,
   onTradingNameChange,
-  showTradingName,
   onAnalyse,
   disabled,
 }: {
@@ -34,8 +33,6 @@ export function CompanyRow({
   onRemove: (companyNumber: string) => void;
   onToggleTradingName: (companyNumber: string) => void;
   onTradingNameChange: (companyNumber: string, value: string) => void;
-  /** Only relevant when web research is on — it is what the search keys off. */
-  showTradingName: boolean;
   onAnalyse: (companyNumber: string) => void;
   disabled: boolean;
 }) {
@@ -110,8 +107,7 @@ export function CompanyRow({
             >
               {open ? "Hide filings" : `${filings.length} filings · PDFs`}
             </button>
-            {showTradingName && (
-              <div className="mt-2.5">
+            <div className="mt-2.5">
                 <label className="flex items-center gap-1.5 text-xs text-muted">
                   <input
                     type="checkbox"
@@ -132,8 +128,7 @@ export function CompanyRow({
                     className="input mt-1.5 text-xs"
                   />
                 )}
-              </div>
-            )}
+            </div>
             <div className="mt-2.5 flex items-center justify-between gap-2">
               <span className="text-xs text-subtle">
                 {selected.length === 0
@@ -141,7 +136,7 @@ export function CompanyRow({
                   : [
                       `${selected.length} ${selected.length === 1 ? "year" : "years"}`,
                       pages > 0 ? `${pages}p` : null,
-                      cost,
+                      cost ? `${cost} + web` : null,
                     ]
                       .filter(Boolean)
                       .join(" · ")}

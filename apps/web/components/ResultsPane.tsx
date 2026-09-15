@@ -100,9 +100,7 @@ function AnalysisBody({ analysis }: { analysis: CompanyAnalysis }) {
     return (
       <Waiting
         label={
-          analysis.research
-            ? "Reading filings, then the web…"
-            : "Reading filings…"
+          analysis.research ? "Reading the filings, then the web…" : "Reading the filings…"
         }
       />
     );
@@ -119,22 +117,25 @@ function AnalysisBody({ analysis }: { analysis: CompanyAnalysis }) {
           .join(" · ")}
         text={
           analysis.research_markdown
-            ? `${analysis.markdown}\n\n${analysis.research_markdown}`
+            ? `${analysis.research_markdown}\n\n${analysis.markdown}`
             : (analysis.markdown ?? "")
         }
       />
-      <Markdown>{analysis.markdown ?? ""}</Markdown>
       {analysis.research_markdown && (
-        <div className="mt-6 border-t border-line pt-5">
+        <div className="mb-6">
           <p className="label mb-3">From the web</p>
           <Markdown>{analysis.research_markdown}</Markdown>
         </div>
       )}
       {analysis.research_error && (
-        <p className="mt-6 border-t border-line pt-5 text-sm text-amber-700 dark:text-amber-300">
+        <p className="mb-6 text-sm text-amber-700 dark:text-amber-300">
           Web research unavailable: {analysis.research_error}
         </p>
       )}
+      <div className={analysis.research_markdown ? "border-t border-line pt-5" : ""}>
+        <p className="label mb-3">From the filed accounts</p>
+        <Markdown>{analysis.markdown ?? ""}</Markdown>
+      </div>
       <Footer model={analysis.model} input={analysis.input_tokens} output={analysis.output_tokens} />
     </>
   );

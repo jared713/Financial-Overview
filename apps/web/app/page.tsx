@@ -20,7 +20,6 @@ export default function Page() {
   const [searching, setSearching] = useState(false);
 
   const [picked, setPicked] = useState<Picked[]>([]);
-  const [research, setResearch] = useState(false);
 
   const [comparison, setComparison] = useState<Comparison | null>(null);
   const [guidance, setGuidance] = useState("");
@@ -214,7 +213,6 @@ export default function Page() {
           target.tradingNameOn && target.tradingName.trim()
             ? target.tradingName.trim()
             : null,
-        research,
       });
       setPicked((current) =>
         current.map((p) =>
@@ -342,8 +340,6 @@ export default function Page() {
           onToggleFiling={toggleFiling}
           onToggleTradingName={toggleTradingName}
           onTradingNameChange={setTradingName}
-          research={research}
-          onResearchChange={setResearch}
           onAnalyse={analyseCompany}
           guidance={guidance}
           onGuidanceChange={setGuidance}

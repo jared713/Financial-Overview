@@ -70,8 +70,9 @@ class AnalyseCompanyRequest(BaseModel):
     # Set when the business is known online by something other than its
     # registered name, which is the common case.
     trading_name: str | None = Field(default=None, max_length=200)
-    # Opt-in: adds a web-research pass (revenue model, recent news).
-    research: bool = False
+    # Web research (revenue model, recent news) is part of every review; the
+    # flag stays so the API can skip it, but nothing in the UI turns it off.
+    research: bool = True
 
 
 class CompanyAnalysisOut(BaseModel):

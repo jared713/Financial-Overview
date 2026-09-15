@@ -19,8 +19,6 @@ export function SelectionRail({
   onToggleFiling,
   onToggleTradingName,
   onTradingNameChange,
-  research,
-  onResearchChange,
   onAnalyse,
   guidance,
   onGuidanceChange,
@@ -42,8 +40,6 @@ export function SelectionRail({
   onToggleFiling: (companyNumber: string, transactionId: string) => void;
   onToggleTradingName: (companyNumber: string) => void;
   onTradingNameChange: (companyNumber: string, value: string) => void;
-  research: boolean;
-  onResearchChange: (value: boolean) => void;
   onAnalyse: (companyNumber: string) => void;
   guidance: string;
   onGuidanceChange: (value: string) => void;
@@ -173,7 +169,6 @@ export function SelectionRail({
                 onRemove={onRemove}
                 onToggleTradingName={onToggleTradingName}
                 onTradingNameChange={onTradingNameChange}
-                showTradingName={research}
                 onAnalyse={onAnalyse}
                 disabled={disabled}
               />
@@ -184,22 +179,6 @@ export function SelectionRail({
 
       {/* Run */}
       <div className="space-y-2.5 border-t border-line p-4">
-        <label className="flex items-start gap-2 text-xs">
-          <input
-            type="checkbox"
-            checked={research}
-            onChange={(e) => onResearchChange(e.target.checked)}
-            disabled={disabled}
-            className="checkbox mt-0.5"
-          />
-          <span>
-            <span className="font-medium text-ink">Research online</span>
-            <span className="block text-muted">
-              Revenue model and recent news, from the company&rsquo;s website and
-              coverage. Slower, and costs more.
-            </span>
-          </span>
-        </label>
         <div>
           <label className="label" htmlFor="guidance">
             Guide the comparison (optional)

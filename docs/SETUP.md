@@ -60,8 +60,8 @@ column per period, a trajectory read, comparability flags, and watch-outs.
 **Across companies** (two or more selected) → a side-by-side table using each company's
 most recent period, how they compare, standouts, comparability caveats, and watch-outs.
 
-**Web research** (optional, per run). A second pass per company using Claude's
-server-side `web_search` and `web_fetch` tools:
+**Web research** leads every company review, using Claude's server-side `web_search` and
+`web_fetch` tools:
 
 - *What they do* — the business in plain terms, and how confident Claude is that it found
   the right company. UK trading names collide constantly, so it is told to confirm the
@@ -72,10 +72,13 @@ server-side `web_search` and `web_fetch` tools:
 - *Recent news* — roughly the last 18 months, dated and attributed.
 - *Sources* — title and URL for each.
 
+Then the filed accounts follow, under their own heading. Research runs *after* the
+accounts review so it can be grounded in the filed figures, but reads first because what
+the business does frames every number.
+
 Most businesses are known online by something other than their registered name, so each
 company has a **Trades under a different name** field; it is passed to the research pass
-as the name to search for. With research on, the comparison also gains a *How they make
-money* section.
+as the name to search for. The comparison also gains a *How they make money* section.
 
 Limits: **5 companies per comparison**, **4 years each**, and 20MB of PDF per company.
 The comparison takes an optional steer ("focus on cash generation and debt"), answered in
@@ -96,8 +99,8 @@ a company only needs analysing again if you change which years it covers.
   usually 9–21 months behind today.
 - A long analysis run (5–6 filings) can take a couple of minutes; the page shows progress
   per company while it works.
-- Web research adds time and cost per company: a handful of searches and page fetches,
-  billed on top of the tokens. It is off by default for that reason.
+- Web research adds time and cost to every company: a handful of searches and page
+  fetches, billed on top of the tokens.
 - Research quality varies wildly by company. A listed plc is well covered; a small private
   company may have no website and no coverage at all, and Claude will say so rather than
   invent something.

@@ -9,9 +9,9 @@ own tab on the right. Repeat for up to **5 companies**, then hit **Compare** —
 optional steer on what matters — for a side-by-side comparison in its own tab. Every
 filing also links to the raw PDF.
 
-Tick **Research online** and each company gets a second pass over the open web —
-what it actually does, how it makes money, and recent news — cross-checked against the
-filed figures. Because businesses are usually known online by something other than their
+Every review starts with the open web — what the company actually does, how it makes
+money, and recent news — cross-checked against the filed figures, then the accounts
+themselves. Because businesses are usually known online by something other than their
 registered name, each company has a **Trades under a different name** box; fill it in and
 the search keys off that instead.
 
@@ -24,9 +24,10 @@ in one request:
    comparison, which keeps the request small and the figures consistent. It also means
    you can analyse as you go and only pay for a comparison when you want one.
 
-Web research, when enabled, is a third call per company, made after its accounts review
-so it can be grounded in the filed figures. It uses Claude's server-side `web_search` and
-`web_fetch` tools — no scraping to run or maintain.
+Web research is a second call per company, made after its accounts review so it can be
+grounded in the filed figures — but it reads first, because what the business does frames
+every number that follows. It uses Claude's server-side `web_search` and `web_fetch`
+tools, so there is no scraping to run or maintain.
 
 Runs are asynchronous: the API returns a job id and the page renders each company's
 review as it lands.

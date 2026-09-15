@@ -85,6 +85,10 @@ def test_analysis_summary_folds_in_research():
     summary = analysis.as_summary()
     assert "Accounts review." in summary.markdown
     assert "They sell groceries." in summary.markdown
+    # The web write-up leads; the filed accounts follow.
+    assert summary.markdown.index("They sell groceries.") < summary.markdown.index(
+        "Accounts review."
+    )
     assert summary.company_name == "TESCO PLC"
 
 

@@ -70,9 +70,9 @@ returning 200.
 - Cost scales with pages, not companies. Five small companies cost pennies; five sets of
   full plc accounts with four years each can run to $20+. The page shows an estimate
   from the filings' page counts before you start.
-- **Web research** (the optional per-company pass) adds server-side web search and fetch
-  on top of that, billed per search. The estimate on the page covers the filings only and
-  says "+ web research" when the option is on.
+- **Web research** runs for every company, adding server-side web search and fetch on top
+  of the token cost, billed per search. The per-company estimate on the page covers the
+  filings only and marks the rest as "+ web".
 - Outbound network access for research is Anthropic's, not your Railway service's — the
   search and fetch run on Anthropic's infrastructure, so nothing extra is needed on the
   container.

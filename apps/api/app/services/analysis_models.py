@@ -40,10 +40,17 @@ class CompanyAnalysis:
     output_tokens: int = 0
 
     def as_summary(self) -> CompanySummary:
-        """What the comparison reads: the accounts review plus any web research."""
+        """What the comparison reads: the web write-up first, then the accounts.
+
+        Research runs second — it is grounded in the filed figures — but reads
+        first, because what the business does frames every number that follows.
+        """
         markdown = self.markdown or ""
         if self.research_markdown:
-            markdown = f"{markdown}\n\n### Business and recent news\n\n{self.research_markdown}"
+            markdown = (
+                f"### Business and recent news\n\n{self.research_markdown}"
+                f"\n\n### Filed accounts\n\n{markdown}"
+            )
         return CompanySummary(
             company_number=self.company_number,
             company_name=self.company_name or self.company_number,
