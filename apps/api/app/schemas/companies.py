@@ -62,41 +62,50 @@ class AnalysisOut(BaseModel):
     output_tokens: int | None = None
 
 
-class CompanySelection(BaseModel):
+class AnalyseCompanyRequest(BaseModel):
     company_number: str
     transaction_ids: list[str] = Field(min_length=1, max_length=4)
     # Set when the business is known online by something other than its
     # registered name, which is the common case.
     trading_name: str | None = Field(default=None, max_length=200)
-
-
-class AnalysisRequest(BaseModel):
-    companies: list[CompanySelection] = Field(min_length=1, max_length=5)
-    question: str | None = None
-    # Opt-in: adds a web-research pass per company (revenue model, recent news).
+    # Opt-in: adds a web-research pass (revenue model, recent news).
     research: bool = False
 
 
-class CompanyRunOut(BaseModel):
+class CompanyAnalysisOut(BaseModel):
+    id: str
+    status: str
     company_number: str
     company_name: str
-    status: str
+    research: bool = False
     filings: list[AnalysedFiling] = []
     markdown: str | None = None
     error: str | None = None
     research_markdown: str | None = None
     research_error: str | None = None
+    model: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
-class AnalysisJobOut(BaseModel):
+class CompareRequest(BaseModel):
+    analysis_ids: list[str] = Field(min_length=2, max_length=5)
+    # Optional steer for the comparison, e.g. "focus on cash generation".
+    guidance: str | None = None
+
+
+class ComparedCompany(BaseModel):
+    company_number: str
+    company_name: str
+
+
+class ComparisonOut(BaseModel):
     id: str
     status: str
-    research: bool = False
-    companies: list[CompanyRunOut]
-    finished: int
-    total: int
-    comparison_markdown: str | None = None
-    comparison_error: str | None = None
+    analysis_ids: list[str]
+    companies: list[ComparedCompany] = []
+    markdown: str | None = None
+    error: str | None = None
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0

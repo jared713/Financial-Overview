@@ -50,26 +50,31 @@ export type AnalysedFiling = {
   size_bytes: number;
 };
 
-export type CompanyRun = {
+export type RunStatus = "running" | "done" | "error";
+
+export type CompanyAnalysis = {
+  id: string;
+  status: RunStatus;
   company_number: string;
   company_name: string;
-  status: "pending" | "running" | "done" | "error";
+  research: boolean;
   filings: AnalysedFiling[];
   markdown?: string | null;
   error?: string | null;
   research_markdown?: string | null;
   research_error?: string | null;
+  model?: string | null;
+  input_tokens: number;
+  output_tokens: number;
 };
 
-export type AnalysisJob = {
+export type Comparison = {
   id: string;
-  status: "running" | "done" | "error";
-  research: boolean;
-  companies: CompanyRun[];
-  finished: number;
-  total: number;
-  comparison_markdown?: string | null;
-  comparison_error?: string | null;
+  status: RunStatus;
+  analysis_ids: string[];
+  companies: { company_number: string; company_name: string }[];
+  markdown?: string | null;
+  error?: string | null;
   model?: string | null;
   input_tokens: number;
   output_tokens: number;
@@ -118,24 +123,26 @@ export const api = {
     apiFetch<CompanyProfile>(`/companies/${companyNumber}`),
   companyFilings: (companyNumber: string) =>
     apiFetch<Filing[]>(`/companies/${companyNumber}/filings`),
-  startAnalysis: (
-    companies: {
-      company_number: string;
-      transaction_ids: string[];
-      trading_name?: string | null;
-    }[],
-    question?: string,
-    research = false,
-  ) =>
-    apiFetch<AnalysisJob>("/analyses", {
+  analyseCompany: (body: {
+    company_number: string;
+    transaction_ids: string[];
+    trading_name?: string | null;
+    research?: boolean;
+  }) =>
+    apiFetch<CompanyAnalysis>("/analyses/company", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  companyAnalysis: (id: string) => apiFetch<CompanyAnalysis>(`/analyses/company/${id}`),
+  compare: (analysisIds: string[], guidance?: string) =>
+    apiFetch<Comparison>("/analyses/compare", {
       method: "POST",
       body: JSON.stringify({
-        companies,
-        question: question?.trim() ? question.trim() : null,
-        research,
+        analysis_ids: analysisIds,
+        guidance: guidance?.trim() ? guidance.trim() : null,
       }),
     }),
-  analysis: (jobId: string) => apiFetch<AnalysisJob>(`/analyses/${jobId}`),
+  comparison: (id: string) => apiFetch<Comparison>(`/analyses/compare/${id}`),
 
   analyseFilings: (
     companyNumber: string,

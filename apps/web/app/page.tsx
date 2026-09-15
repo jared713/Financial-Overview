@@ -4,9 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Banner } from "@/components/Banner";
 import type { Picked } from "@/components/CompanyRow";
 import { ResultsPane } from "@/components/ResultsPane";
+import type { ResultTab } from "@/components/ResultsPane";
 import { SelectionRail } from "@/components/SelectionRail";
-import { MAX_COMPANIES, MAX_FILINGS_PER_COMPANY, api, estimateCost } from "@/lib/api";
-import type { AnalysisJob, CompanyHit, FilingFeatures } from "@/lib/api";
+import { MAX_COMPANIES, MAX_FILINGS_PER_COMPANY, api } from "@/lib/api";
+import type { CompanyHit, Comparison, FilingFeatures } from "@/lib/api";
 
 const POLL_MS = 2500;
 
@@ -18,12 +19,13 @@ export default function Page() {
   const [searching, setSearching] = useState(false);
 
   const [picked, setPicked] = useState<Picked[]>([]);
-  const [question, setQuestion] = useState("");
   const [research, setResearch] = useState(false);
 
-  const [job, setJob] = useState<AnalysisJob | null>(null);
-  const [starting, setStarting] = useState(false);
+  const [comparison, setComparison] = useState<Comparison | null>(null);
+  const [guidance, setGuidance] = useState("");
+  const [focusId, setFocusId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -39,6 +41,51 @@ export default function Page() {
 
   useEffect(() => stopPolling, [stopPolling]);
 
+  // One timer polls everything still running — analyses and the comparison —
+  // and stops itself once nothing is.
+  const ensurePolling = useCallback(() => {
+    if (pollRef.current) return;
+    pollRef.current = setInterval(async () => {
+      let running = 0;
+      try {
+        const current = pickedRef.current;
+        for (const p of current) {
+          if (p.analysis?.status === "running") {
+            running += 1;
+            const next = await api.companyAnalysis(p.analysis.id);
+            setPicked((list) =>
+              list.map((item) =>
+                item.profile.company_number === p.profile.company_number
+                  ? { ...item, analysis: next }
+                  : item,
+              ),
+            );
+          }
+        }
+        const currentComparison = comparisonRef.current;
+        if (currentComparison?.status === "running") {
+          running += 1;
+          setComparison(await api.comparison(currentComparison.id));
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        stopPolling();
+        return;
+      }
+      if (running === 0) stopPolling();
+    }, POLL_MS);
+  }, [stopPolling]);
+
+  // Refs so the interval always reads current state without being re-created.
+  const pickedRef = useRef<Picked[]>([]);
+  const comparisonRef = useRef<Comparison | null>(null);
+  useEffect(() => {
+    pickedRef.current = picked;
+  }, [picked]);
+  useEffect(() => {
+    comparisonRef.current = comparison;
+  }, [comparison]);
+
   async function search() {
     if (!query.trim()) return;
     setSearching(true);
@@ -53,11 +100,15 @@ export default function Page() {
     }
   }
 
+  function clearSearch() {
+    setQuery("");
+    setHits(null);
+  }
+
   async function addCompany(hit: CompanyHit) {
     if (picked.some((p) => p.profile.company_number === hit.company_number)) return;
     if (picked.length >= MAX_COMPANIES) return;
 
-    // Show the row immediately, fill in the filings when they arrive.
     setPicked((current) => [
       ...current,
       {
@@ -81,8 +132,6 @@ export default function Page() {
         api.company(hit.company_number),
         api.companyFilings(hit.company_number),
       ]);
-      // Preselect the two most recent years — enough for a year-on-year read;
-      // tick more for a longer trend.
       const selected = filings
         .filter((f) => f.downloadable)
         .slice(0, 2)
@@ -104,11 +153,6 @@ export default function Page() {
         ),
       );
     }
-  }
-
-  function clearSearch() {
-    setQuery("");
-    setHits(null);
   }
 
   function removeCompany(companyNumber: string) {
@@ -149,67 +193,85 @@ export default function Page() {
     );
   }
 
-  async function run() {
-    const companies = picked
-      .filter((p) => p.selected.length > 0)
-      .map((p) => ({
-        company_number: p.profile.company_number,
-        transaction_ids: p.selected,
-        trading_name:
-          p.tradingNameOn && p.tradingName.trim() ? p.tradingName.trim() : null,
-      }));
-    if (companies.length === 0) return;
-
-    setStarting(true);
+  async function analyseCompany(companyNumber: string) {
+    const target = picked.find((p) => p.profile.company_number === companyNumber);
+    if (!target || target.selected.length === 0) return;
     setError(null);
-    setJob(null);
-    stopPolling();
     try {
-      const started = await api.startAnalysis(companies, question, research);
-      setJob(started);
-      pollRef.current = setInterval(async () => {
-        try {
-          const next = await api.analysis(started.id);
-          setJob(next);
-          if (next.status !== "running") stopPolling();
-        } catch (e) {
-          stopPolling();
-          setError(e instanceof Error ? e.message : String(e));
-        }
-      }, POLL_MS);
+      const analysis = await api.analyseCompany({
+        company_number: companyNumber,
+        transaction_ids: target.selected,
+        trading_name:
+          target.tradingNameOn && target.tradingName.trim()
+            ? target.tradingName.trim()
+            : null,
+        research,
+      });
+      setPicked((current) =>
+        current.map((p) =>
+          p.profile.company_number === companyNumber
+            ? { ...p, analysis, analysedSelection: [...target.selected] }
+            : p,
+        ),
+      );
+      setFocusId(analysis.id);
+      ensurePolling();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setStarting(false);
+    }
+  }
+
+  async function compare() {
+    const ids = picked
+      .filter((p) => p.analysis?.status === "done")
+      .map((p) => p.analysis!.id);
+    if (ids.length < 2) return;
+    setError(null);
+    try {
+      const started = await api.compare(ids, guidance);
+      setComparison(started);
+      setFocusId(started.id);
+      ensurePolling();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
   const claudeOff = features !== null && !features.claude_review;
   const chOff = features !== null && !features.companies_house;
-  const ready = picked.filter((p) => p.selected.length > 0);
-  const filingCount = ready.reduce((n, p) => n + p.selected.length, 0);
-  const pageCount = ready.reduce(
-    (n, p) =>
-      n +
-      p.filings
-        .filter((f) => p.selected.includes(f.transaction_id))
-        .reduce((m, f) => m + (f.pages ?? 0), 0),
-    0,
-  );
-  const cost = estimateCost(pageCount, features?.model);
-  const busy = job?.status === "running" || starting;
+  const done = picked.filter((p) => p.analysis?.status === "done");
+  const analysing = picked.some((p) => p.analysis?.status === "running");
 
-  const summary =
-    ready.length === 0
-      ? "Pick at least one year of accounts."
-      : [
-          `${ready.length} ${ready.length === 1 ? "company" : "companies"}`,
-          `${filingCount} ${filingCount === 1 ? "filing" : "filings"}`,
-          pageCount > 0 ? `${pageCount} pages` : null,
-          cost ? `${cost} estimated${research ? " + web research" : ""}` : null,
+  const tabs: ResultTab[] = [
+    ...(comparison
+      ? [
+          {
+            kind: "comparison" as const,
+            id: comparison.id,
+            title: "Comparison",
+            status: comparison.status,
+            comparison,
+          },
         ]
-          .filter(Boolean)
-          .join(" · ");
+      : []),
+    ...picked
+      .filter((p) => p.analysis !== undefined)
+      .map((p) => ({
+        kind: "company" as const,
+        id: p.analysis!.id,
+        title: p.analysis!.company_name || p.profile.company_name,
+        status: p.analysis!.status,
+        analysis: p.analysis!,
+      })),
+  ];
+
+  const summary = analysing
+    ? "Analysing… you can add and analyse others meanwhile."
+    : done.length >= 2
+      ? `${done.length} analysed and ready to compare.`
+      : done.length === 1
+        ? "Analyse a second company to compare."
+        : "Analyse a company to get started.";
 
   return (
     <div className="lg:grid lg:grid-cols-[22rem_minmax(0,1fr)]">
@@ -229,42 +291,42 @@ export default function Page() {
           onTradingNameChange={setTradingName}
           research={research}
           onResearchChange={setResearch}
-          question={question}
-          onQuestionChange={setQuestion}
-          onRun={run}
-          busy={busy}
-          canRun={ready.length > 0 && !claudeOff}
+          onAnalyse={analyseCompany}
+          guidance={guidance}
+          onGuidanceChange={setGuidance}
+          onCompare={compare}
+          comparing={comparison?.status === "running"}
+          readyToCompare={done.length}
           summary={summary}
-          disabled={chOff}
+          disabled={chOff || claudeOff}
         />
       </aside>
 
       <main className="min-w-0 space-y-4 px-5 py-6 sm:px-8">
-        {/* Cap the reading width so tables and prose stay legible on wide screens. */}
         <div className="mx-auto w-full max-w-5xl space-y-4">
-        <header>
-          <h1 className="page-title">UK company accounts</h1>
-          <p className="page-subtitle">
-            Claude reviews each company from its filed accounts, then compares them.
-          </p>
-        </header>
+          <header>
+            <h1 className="page-title">UK company accounts</h1>
+            <p className="page-subtitle">
+              Analyse companies one at a time, then compare them when you are ready.
+            </p>
+          </header>
 
-        {chOff && (
-          <Banner tone="red">
-            <code className="font-mono text-xs">COMPANIES_HOUSE_API_KEY</code> is not set
-            on the API service, so search and downloads are unavailable.
-          </Banner>
-        )}
-        {claudeOff && !chOff && (
-          <Banner tone="amber">
-            <code className="font-mono text-xs">ANTHROPIC_API_KEY</code> is not set on the
-            API service. Filings can be searched and downloaded, but Claude review is
-            switched off.
-          </Banner>
-        )}
-        {error && <Banner tone="red">{error}</Banner>}
+          {chOff && (
+            <Banner tone="red">
+              <code className="font-mono text-xs">COMPANIES_HOUSE_API_KEY</code> is not set
+              on the API service, so search and downloads are unavailable.
+            </Banner>
+          )}
+          {claudeOff && !chOff && (
+            <Banner tone="amber">
+              <code className="font-mono text-xs">ANTHROPIC_API_KEY</code> is not set on the
+              API service. Filings can be searched and downloaded, but Claude review is
+              switched off.
+            </Banner>
+          )}
+          {error && <Banner tone="red">{error}</Banner>}
 
-        <ResultsPane job={job} />
+          <ResultsPane tabs={tabs} focusId={focusId} />
         </div>
       </main>
     </div>

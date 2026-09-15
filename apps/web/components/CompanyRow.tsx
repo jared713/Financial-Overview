@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { StatusBadge } from "@/components/StatusBadge";
 import { YearPills } from "@/components/YearPills";
-import { MAX_FILINGS_PER_COMPANY, filingPdfUrl } from "@/lib/api";
-import type { CompanyProfile, Filing } from "@/lib/api";
+import { MAX_FILINGS_PER_COMPANY, estimateCost, filingPdfUrl } from "@/lib/api";
+import type { CompanyAnalysis, CompanyProfile, Filing } from "@/lib/api";
 
 export type Picked = {
   profile: CompanyProfile;
@@ -14,6 +14,9 @@ export type Picked = {
   error?: string;
   tradingNameOn: boolean;
   tradingName: string;
+  analysis?: CompanyAnalysis;
+  /** The years the current analysis was run on, to spot a stale result. */
+  analysedSelection?: string[];
 };
 
 export function CompanyRow({
@@ -23,6 +26,8 @@ export function CompanyRow({
   onToggleTradingName,
   onTradingNameChange,
   showTradingName,
+  onAnalyse,
+  disabled,
 }: {
   picked: Picked;
   onToggleFiling: (companyNumber: string, transactionId: string) => void;
@@ -31,9 +36,31 @@ export function CompanyRow({
   onTradingNameChange: (companyNumber: string, value: string) => void;
   /** Only relevant when web research is on — it is what the search keys off. */
   showTradingName: boolean;
+  onAnalyse: (companyNumber: string) => void;
+  disabled: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const { profile, filings, selected } = picked;
+  const { profile, filings, selected, analysis } = picked;
+
+  const pages = filings
+    .filter((f) => selected.includes(f.transaction_id))
+    .reduce((n, f) => n + (f.pages ?? 0), 0);
+  const cost = estimateCost(pages);
+  const running = analysis?.status === "running";
+  const stale =
+    analysis !== undefined &&
+    picked.analysedSelection !== undefined &&
+    (picked.analysedSelection.length !== selected.length ||
+      !picked.analysedSelection.every((t) => selected.includes(t)));
+  const label = running
+    ? "Analysing…"
+    : analysis === undefined
+      ? "Analyse"
+      : stale
+        ? "Re-analyse"
+        : analysis.status === "error"
+          ? "Try again"
+          : "Analysed";
 
   return (
     <li className="border-b border-line px-4 py-3 last:border-b-0">
@@ -107,6 +134,32 @@ export function CompanyRow({
                 )}
               </div>
             )}
+            <div className="mt-2.5 flex items-center justify-between gap-2">
+              <span className="text-xs text-subtle">
+                {selected.length === 0
+                  ? "Pick a year"
+                  : [
+                      `${selected.length} ${selected.length === 1 ? "year" : "years"}`,
+                      pages > 0 ? `${pages}p` : null,
+                      cost,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+              </span>
+              <button
+                type="button"
+                onClick={() => onAnalyse(profile.company_number)}
+                disabled={
+                  disabled ||
+                  running ||
+                  selected.length === 0 ||
+                  (analysis?.status === "done" && !stale)
+                }
+                className="btn-primary px-2.5 py-1 text-xs"
+              >
+                {label}
+              </button>
+            </div>
             {open && (
               <ul className="mt-1.5 space-y-1 border-l border-line pl-2.5">
                 {filings.map((f) => (

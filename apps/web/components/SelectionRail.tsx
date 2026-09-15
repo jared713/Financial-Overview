@@ -21,11 +21,12 @@ export function SelectionRail({
   onTradingNameChange,
   research,
   onResearchChange,
-  question,
-  onQuestionChange,
-  onRun,
-  busy,
-  canRun,
+  onAnalyse,
+  guidance,
+  onGuidanceChange,
+  onCompare,
+  comparing,
+  readyToCompare,
   summary,
   disabled,
 }: {
@@ -43,11 +44,13 @@ export function SelectionRail({
   onTradingNameChange: (companyNumber: string, value: string) => void;
   research: boolean;
   onResearchChange: (value: boolean) => void;
-  question: string;
-  onQuestionChange: (value: string) => void;
-  onRun: () => void;
-  busy: boolean;
-  canRun: boolean;
+  onAnalyse: (companyNumber: string) => void;
+  guidance: string;
+  onGuidanceChange: (value: string) => void;
+  onCompare: () => void;
+  comparing: boolean;
+  /** How many finished analyses are available to compare. */
+  readyToCompare: number;
   summary: string;
   disabled: boolean;
 }) {
@@ -171,6 +174,8 @@ export function SelectionRail({
                 onToggleTradingName={onToggleTradingName}
                 onTradingNameChange={onTradingNameChange}
                 showTradingName={research}
+                onAnalyse={onAnalyse}
+                disabled={disabled}
               />
             ))}
           </ul>
@@ -196,26 +201,30 @@ export function SelectionRail({
           </span>
         </label>
         <div>
-          <label className="label" htmlFor="question">
-            Question (optional)
+          <label className="label" htmlFor="guidance">
+            Guide the comparison (optional)
           </label>
           <textarea
-            id="question"
-            value={question}
-            onChange={(e) => onQuestionChange(e.target.value)}
+            id="guidance"
+            value={guidance}
+            onChange={(e) => onGuidanceChange(e.target.value)}
             rows={2}
-            placeholder="e.g. Which has the strongest balance sheet?"
+            placeholder="e.g. Focus on cash generation and debt"
             disabled={disabled}
             className="input mt-1.5 resize-y text-xs"
           />
         </div>
         <button
           type="button"
-          onClick={onRun}
-          disabled={!canRun || busy || disabled}
+          onClick={onCompare}
+          disabled={readyToCompare < 2 || comparing || disabled}
           className="btn-primary w-full"
         >
-          {busy ? "Reviewing…" : "Review with Claude"}
+          {comparing
+            ? "Comparing…"
+            : readyToCompare >= 2
+              ? `Compare ${readyToCompare} companies`
+              : "Compare"}
         </button>
         <p className="text-xs text-subtle">{summary}</p>
       </div>

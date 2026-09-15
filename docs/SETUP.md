@@ -77,8 +77,12 @@ company has a **Trades under a different name** field; it is passed to the resea
 as the name to search for. With research on, the comparison also gains a *How they make
 money* section.
 
-Limits: **5 companies**, **4 years each**, and 20MB of PDF per company. You can add a
-free-text question, answered in an extra section of the comparison.
+Limits: **5 companies per comparison**, **4 years each**, and 20MB of PDF per company.
+The comparison takes an optional steer ("focus on cash generation and debt"), answered in
+an extra section.
+
+Companies are analysed one at a time, so you can read the first while the second runs, and
+a company only needs analysing again if you change which years it covers.
 
 ## 5. Limits worth knowing
 

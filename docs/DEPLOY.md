@@ -8,10 +8,10 @@ GitHub (main)
    └─> Railway ── apps/api      (FastAPI, Dockerfile)
 ```
 
-No database — the API keeps nothing between runs. Analysis runs are tracked as
-in-memory jobs, so **run the API as a single replica**: a second instance would not see
-the first one's jobs, and the page's polling would 404 at random. A redeploy also drops
-any run in flight; the page says so and you start it again.
+No database — the API keeps nothing durable. Company analyses and comparisons are held
+in memory for four hours, so **run the API as a single replica**: a second instance would
+not see the first one's work, and polling would 404 at random. A redeploy drops finished
+analyses too, so a comparison started afterwards will ask you to re-run those companies.
 
 ## Railway — API
 
@@ -48,8 +48,8 @@ returning 200.
 - Companies House API is free (600 requests / 5 minutes).
 - Anthropic is the only per-use cost: roughly $0.30–$1.50 for two sets of full accounts,
   a few cents for small-company filings. `ANTHROPIC_MAX_TOKENS` caps the response.
-- A run of five companies takes several minutes. That is why runs are asynchronous —
-  `POST /analyses` returns immediately and the page polls — so there is no gateway
+- Each company takes a minute or two, and the comparison another. That is why both are
+  asynchronous — the POST returns an id and the page polls — so there is no gateway
   timeout to tune.
 - Cost scales with pages, not companies. Five small companies cost pennies; five sets of
   full plc accounts with four years each can run to $20+. The page shows an estimate
