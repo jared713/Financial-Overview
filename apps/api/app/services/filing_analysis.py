@@ -228,3 +228,141 @@ async def analyse_filings(
         input_tokens=getattr(usage, "input_tokens", None),
         output_tokens=getattr(usage, "output_tokens", None),
     )
+
+
+CROSS_COMPANY_SYSTEM_PROMPT = """You are a financial analyst comparing several UK \
+companies from their filed statutory accounts. You are given a written review of \
+each company, prepared from its own filings at Companies House.
+
+Work only from the reviews given. Where a review says a figure is "not disclosed", \
+keep it as not disclosed — most small UK companies file filleted or micro-entity \
+accounts with no profit and loss account, so gaps are normal and must not be filled \
+in by inference. Never invent a number, and never carry a figure from one company \
+onto another.
+
+Be careful about like-for-like: companies file to different period ends, under \
+different accounts regimes, and in different industries. Say so when it limits the \
+comparison.
+
+Write in plain British English. Be concise and specific."""
+
+CROSS_COMPANY_INSTRUCTIONS = """Compare the {count} companies reviewed above and produce \
+Markdown with these sections:
+
+## Side by side
+One Markdown table: a row per key figure, a column per company, using each company's \
+most recent period. Put the period end date under each company name in the header so \
+the reader can see what is being compared. Cover the figures the reviews actually \
+disclose — typically turnover, operating profit, profit before tax, net assets, cash \
+at bank, creditors due within one year, creditors due after one year, and average \
+employees. Use "not disclosed" where a company does not give the figure.
+
+## How they compare
+Five to eight bullets on the differences that matter: relative size, growth, \
+profitability, balance-sheet strength, cash, leverage, and headcount efficiency. \
+Name the companies and give the figures you are comparing. Where only some companies \
+disclose a measure, say which.
+
+## Standouts
+The strongest and the weakest on the evidence available, and what specifically makes \
+each so. If the filings do not support a judgement, say that instead.
+
+## Comparability caveats
+What makes this less than like-for-like — different period ends, different accounts \
+regimes (full vs filleted vs micro-entity), different industries, a short period, or \
+a company whose figures are largely undisclosed.
+
+## Watch-outs
+The three to five things you would want answered before relying on this comparison."""
+
+
+@dataclass
+class CompanySummary:
+    """One company's own review, as input to the cross-company comparison."""
+
+    company_number: str
+    company_name: str
+    markdown: str
+
+
+def build_comparison_content(
+    summaries: list[CompanySummary], question: str | None = None
+) -> list[dict[str, Any]]:
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": (
+                f"{len(summaries)} company reviews follow, each prepared from that "
+                "company's own filed accounts."
+            ),
+        }
+    ]
+    for summary in summaries:
+        blocks.append(
+            {
+                "type": "text",
+                "text": (
+                    f"--- Review of {summary.company_name} "
+                    f"(company number {summary.company_number}) ---\n\n"
+                    f"{summary.markdown}"
+                ),
+            }
+        )
+    instructions = CROSS_COMPANY_INSTRUCTIONS.format(count=len(summaries))
+    if question:
+        instructions += (
+            "\n\n## Answering the specific question\n"
+            "Finally, answer this question from the reviews, or say plainly that they "
+            f"do not contain the answer:\n{question.strip()}"
+        )
+    blocks.append({"type": "text", "text": instructions})
+    return blocks
+
+
+async def compare_companies(
+    summaries: list[CompanySummary],
+    *,
+    api_key: str | None,
+    model: str,
+    max_tokens: int = 8000,
+    question: str | None = None,
+) -> AnalysisResult:
+    """Second pass: one comparison across the per-company reviews."""
+    if not api_key:
+        raise FilingAnalysisError("ANTHROPIC_API_KEY is not configured", 503)
+    if len(summaries) < 2:
+        raise FilingAnalysisError("Comparison needs at least two companies", 400)
+
+    try:
+        from anthropic import AsyncAnthropic
+    except ImportError as e:  # pragma: no cover - dependency is declared
+        raise FilingAnalysisError(f"anthropic SDK not installed: {e}", 500) from e
+
+    client = AsyncAnthropic(api_key=api_key, timeout=600.0, max_retries=2)
+    log.info("Comparing %d companies", len(summaries))
+    try:
+        message = await client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=CROSS_COMPANY_SYSTEM_PROMPT,
+            messages=[
+                {"role": "user", "content": build_comparison_content(summaries, question)}
+            ],
+        )
+    except Exception as e:
+        status = getattr(e, "status_code", None)
+        raise FilingAnalysisError(f"Claude comparison failed: {e}", status or 502) from e
+
+    markdown = "\n".join(
+        block.text for block in message.content if getattr(block, "type", None) == "text"
+    ).strip()
+    if not markdown:
+        raise FilingAnalysisError("Claude returned an empty comparison", 502)
+
+    usage = getattr(message, "usage", None)
+    return AnalysisResult(
+        markdown=markdown,
+        model=message.model,
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+    )

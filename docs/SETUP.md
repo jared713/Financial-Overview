@@ -53,14 +53,15 @@ than summarising each in isolation.
 
 ## 4. What you get back
 
-One filing selected → filing details, a table of the disclosed figures, what stands
-out, and watch-outs.
+**Per company.** One year selected → filing details, a table of the disclosed figures,
+what stands out, and watch-outs. Two or more years → an overview, a trend table with one
+column per period, a trajectory read, comparability flags, and watch-outs.
 
-Two or more → an overview, a trend table with one column per accounting period, a
-trajectory read, comparability flags, and watch-outs. Up to 6 filings per request
-(and 20MB of PDF).
+**Across companies** (two or more selected) → a side-by-side table using each company's
+most recent period, how they compare, standouts, comparability caveats, and watch-outs.
 
-You can add a free-text question, answered from the filings in an extra section.
+Limits: **5 companies**, **4 years each**, and 20MB of PDF per company. You can add a
+free-text question, answered in an extra section of the comparison.
 
 ## 5. Limits worth knowing
 

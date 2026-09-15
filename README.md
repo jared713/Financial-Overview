@@ -1,12 +1,21 @@
 # Financial Overview
 
-Search a UK company at Companies House, pull its filed statutory accounts as PDFs, and
-have Claude summarise one filing or compare several.
+Search UK companies at Companies House, pull their filed statutory accounts as PDFs,
+and have Claude review and compare them.
 
-Type a company name → pick from the search results → its accounts filings list out,
-newest first → tick the ones you want → Claude reads the actual PDFs and returns a
-summary (one filing) or a trend table plus trajectory read (several). Every filing also
-links to the raw PDF.
+Add up to **5 companies**, tick up to **4 years** of accounts for each, and Claude reads
+the actual filed PDFs: a review per company, then a cross-company comparison with a
+side-by-side table. Every filing also links to the raw PDF.
+
+Two passes, because five companies' accounts will not fit in one request:
+
+1. **Per company** — that company's selected filings go up together, so the review reads
+   year on year within the company.
+2. **Across companies** — the per-company reviews (not the PDFs again) go up for the
+   comparison, which keeps the request small and the figures consistent.
+
+Runs are asynchronous: the API returns a job id and the page renders each company's
+review as it lands.
 
 ## Stack
 
@@ -21,9 +30,10 @@ links to the raw PDF.
 apps/
   api/         FastAPI service
     app/
-      routers/       /companies
+      routers/       /companies, /analyses
       schemas/       Pydantic response models
-      services/      Companies House client, Claude filing analysis
+      services/      Companies House client, Claude filing analysis,
+                     multi-company run jobs
     tests/
   web/         Next.js app
     app/             the search + review page
@@ -63,7 +73,9 @@ cd apps/web && npm install && npm run dev
 | GET | `/companies/{number}` | Company profile |
 | GET | `/companies/{number}/filings` | Accounts filings, newest first |
 | GET | `/companies/{number}/filings/{transaction_id}/pdf` | The filed PDF |
-| POST | `/companies/{number}/analyse` | `{transaction_ids: [], question?}` → Markdown review |
+| POST | `/analyses` | Start a run: `{companies: [{company_number, transaction_ids}], question?}` → job |
+| GET | `/analyses/{job_id}` | Poll a run: per-company reviews plus the comparison |
+| POST | `/companies/{number}/analyse` | Single company, synchronous → Markdown review |
 
 Interactive docs at `/docs` when the API is running.
 

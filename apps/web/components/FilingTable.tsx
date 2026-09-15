@@ -3,8 +3,6 @@
 import type { Filing } from "@/lib/api";
 import { filingPdfUrl } from "@/lib/api";
 
-const MAX_SELECTED = 6;
-
 /** Companies House descriptions are slugs like
  *  "accounts-with-accounts-type-total-exemption-full" — show the part that
  *  actually distinguishes one filing from another. */
@@ -21,11 +19,13 @@ export function FilingTable({
   filings,
   selected,
   onToggle,
+  maxSelected,
 }: {
   companyNumber: string;
   filings: Filing[];
   selected: string[];
   onToggle: (transactionId: string) => void;
+  maxSelected: number;
 }) {
   if (filings.length === 0) {
     return (
@@ -52,7 +52,7 @@ export function FilingTable({
         <tbody>
           {filings.map((f) => {
             const isSelected = selected.includes(f.transaction_id);
-            const atLimit = !isSelected && selected.length >= MAX_SELECTED;
+            const atLimit = !isSelected && selected.length >= maxSelected;
             return (
               <tr
                 key={f.transaction_id}
@@ -97,5 +97,3 @@ export function FilingTable({
     </div>
   );
 }
-
-export { MAX_SELECTED };

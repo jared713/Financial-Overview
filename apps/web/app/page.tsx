@@ -1,16 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { FilingTable, MAX_SELECTED } from "@/components/FilingTable";
-import { Markdown } from "@/components/Markdown";
-import { api, fmtBytes } from "@/lib/api";
-import type {
-  CompanyHit,
-  CompanyProfile,
-  Filing,
-  FilingAnalysis,
-  FilingFeatures,
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Banner } from "@/components/Banner";
+import { CompanyCard } from "@/components/CompanyCard";
+import type { Picked } from "@/components/CompanyCard";
+import { ResultsPanel } from "@/components/ResultsPanel";
+import { StatusBadge } from "@/components/StatusBadge";
+import {
+  MAX_COMPANIES,
+  MAX_FILINGS_PER_COMPANY,
+  api,
+  estimateCost,
 } from "@/lib/api";
+import type { AnalysisJob, CompanyHit, FilingFeatures } from "@/lib/api";
+
+const POLL_MS = 2500;
 
 export default function Page() {
   const [features, setFeatures] = useState<FilingFeatures | null>(null);
@@ -19,41 +23,32 @@ export default function Page() {
   const [hits, setHits] = useState<CompanyHit[] | null>(null);
   const [searching, setSearching] = useState(false);
 
-  const [company, setCompany] = useState<CompanyProfile | null>(null);
-  const [filings, setFilings] = useState<Filing[]>([]);
-  const [loadingFilings, setLoadingFilings] = useState(false);
-
-  const [selected, setSelected] = useState<string[]>([]);
+  const [picked, setPicked] = useState<Picked[]>([]);
   const [question, setQuestion] = useState("");
 
-  const [analysis, setAnalysis] = useState<FilingAnalysis | null>(null);
-  const [analysing, setAnalysing] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
-
+  const [job, setJob] = useState<AnalysisJob | null>(null);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const resultRef = useRef<HTMLDivElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     api.filingFeatures().then(setFeatures).catch(() => setFeatures(null));
   }, []);
 
-  useEffect(() => {
-    if (!analysing) return;
-    setElapsed(0);
-    const started = Date.now();
-    const id = setInterval(() => setElapsed(Math.round((Date.now() - started) / 1000)), 1000);
-    return () => clearInterval(id);
-  }, [analysing]);
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => stopPolling, [stopPolling]);
 
   async function search() {
     if (!query.trim()) return;
     setSearching(true);
     setError(null);
-    setCompany(null);
-    setFilings([]);
-    setSelected([]);
-    setAnalysis(null);
     try {
       setHits(await api.searchCompanies(query.trim()));
     } catch (e) {
@@ -64,78 +59,140 @@ export default function Page() {
     }
   }
 
-  async function pickCompany(companyNumber: string) {
-    setLoadingFilings(true);
-    setError(null);
-    setAnalysis(null);
-    setSelected([]);
+  async function addCompany(hit: CompanyHit) {
+    if (picked.some((p) => p.profile.company_number === hit.company_number)) return;
+    if (picked.length >= MAX_COMPANIES) return;
+
+    // Show the card immediately, fill in the filings when they arrive.
+    const placeholder: Picked = {
+      profile: {
+        company_number: hit.company_number,
+        company_name: hit.title,
+        company_status: hit.company_status,
+        company_type: hit.company_type,
+        sic_codes: [],
+      },
+      filings: [],
+      selected: [],
+      loading: true,
+    };
+    setPicked((current) => [...current, placeholder]);
+
     try {
-      const [profile, rows] = await Promise.all([
-        api.company(companyNumber),
-        api.companyFilings(companyNumber),
+      const [profile, filings] = await Promise.all([
+        api.company(hit.company_number),
+        api.companyFilings(hit.company_number),
       ]);
-      setCompany(profile);
-      setFilings(rows);
-      // Preselect the two most recent downloadable filings — the common case is
-      // "how does the latest year compare with the one before".
-      setSelected(rows.filter((f) => f.downloadable).slice(0, 2).map((f) => f.transaction_id));
+      // Preselect the two most recent downloadable filings — enough for a
+      // year-on-year read per company; tick more for a longer trend.
+      const selected = filings
+        .filter((f) => f.downloadable)
+        .slice(0, 2)
+        .map((f) => f.transaction_id);
+      setPicked((current) =>
+        current.map((p) =>
+          p.profile.company_number === hit.company_number
+            ? { profile, filings, selected, loading: false }
+            : p,
+        ),
+      );
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoadingFilings(false);
+      const message = e instanceof Error ? e.message : String(e);
+      setPicked((current) =>
+        current.map((p) =>
+          p.profile.company_number === hit.company_number
+            ? { ...p, loading: false, error: message }
+            : p,
+        ),
+      );
     }
   }
 
-  function toggle(transactionId: string) {
-    setSelected((current) =>
-      current.includes(transactionId)
-        ? current.filter((t) => t !== transactionId)
-        : [...current, transactionId],
+  function removeCompany(companyNumber: string) {
+    setPicked((current) => current.filter((p) => p.profile.company_number !== companyNumber));
+  }
+
+  function toggleFiling(companyNumber: string, transactionId: string) {
+    setPicked((current) =>
+      current.map((p) => {
+        if (p.profile.company_number !== companyNumber) return p;
+        const has = p.selected.includes(transactionId);
+        if (!has && p.selected.length >= MAX_FILINGS_PER_COMPANY) return p;
+        return {
+          ...p,
+          selected: has
+            ? p.selected.filter((t) => t !== transactionId)
+            : [...p.selected, transactionId],
+        };
+      }),
     );
   }
 
-  async function analyse() {
-    if (!company || selected.length === 0) return;
-    setAnalysing(true);
+  async function run() {
+    const companies = picked
+      .filter((p) => p.selected.length > 0)
+      .map((p) => ({
+        company_number: p.profile.company_number,
+        transaction_ids: p.selected,
+      }));
+    if (companies.length === 0) return;
+
+    setStarting(true);
     setError(null);
-    setAnalysis(null);
+    setJob(null);
+    stopPolling();
     try {
-      // Send oldest first so the comparison reads left-to-right in time order.
-      const ordered = filings
-        .filter((f) => selected.includes(f.transaction_id))
-        .slice()
-        .reverse()
-        .map((f) => f.transaction_id);
-      const result = await api.analyseFilings(company.company_number, ordered, question);
-      setAnalysis(result);
+      const started = await api.startAnalysis(companies, question);
+      setJob(started);
       requestAnimationFrame(() =>
-        resultRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
+        resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }),
       );
+      pollRef.current = setInterval(async () => {
+        try {
+          const next = await api.analysis(started.id);
+          setJob(next);
+          if (next.status !== "running") stopPolling();
+        } catch (e) {
+          stopPolling();
+          setError(e instanceof Error ? e.message : String(e));
+        }
+      }, POLL_MS);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setAnalysing(false);
+      setStarting(false);
     }
   }
 
   const claudeOff = features !== null && !features.claude_review;
   const chOff = features !== null && !features.companies_house;
+  const readyCompanies = picked.filter((p) => p.selected.length > 0);
+  const filingCount = readyCompanies.reduce((n, p) => n + p.selected.length, 0);
+  const pageCount = readyCompanies.reduce(
+    (n, p) =>
+      n +
+      p.filings
+        .filter((f) => p.selected.includes(f.transaction_id))
+        .reduce((m, f) => m + (f.pages ?? 0), 0),
+    0,
+  );
+  const cost = estimateCost(pageCount, features?.model);
+  const busy = job?.status === "running" || starting;
 
   return (
     <div className="space-y-6">
       <header>
         <h1 className="page-title">UK company accounts</h1>
         <p className="page-subtitle">
-          Search a company at Companies House, pull its filed accounts, and have Claude
-          summarise one or compare several.
+          Pick up to {MAX_COMPANIES} companies and the years you want. Claude reviews each
+          company from its filed accounts, then compares them.
         </p>
       </header>
 
       {chOff && (
         <Banner tone="red">
           <code className="font-mono text-xs">COMPANIES_HOUSE_API_KEY</code> is not set on
-          the API service, so search and downloads are unavailable. See{" "}
-          <code className="font-mono text-xs">docs/SETUP.md</code>.
+          the API service, so search and downloads are unavailable.
         </Banner>
       )}
       {claudeOff && !chOff && (
@@ -149,7 +206,7 @@ export default function Page() {
       <section className="card">
         <div className="card-body">
           <label className="label" htmlFor="company-search">
-            Company
+            Add a company
           </label>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <input
@@ -178,31 +235,37 @@ export default function Page() {
             ) : (
               <ul>
                 {hits.map((hit) => {
-                  const active = company?.company_number === hit.company_number;
+                  const added = picked.some(
+                    (p) => p.profile.company_number === hit.company_number,
+                  );
+                  const full = picked.length >= MAX_COMPANIES;
                   return (
-                    <li key={hit.company_number} className="border-b border-line last:border-b-0">
-                      <button
-                        type="button"
-                        onClick={() => pickCompany(hit.company_number)}
-                        className={`flex w-full items-center justify-between gap-4 px-5 py-3 text-left transition-colors ${
-                          active ? "bg-accent-soft" : "hover:bg-canvas"
-                        }`}
-                      >
-                        <span className="min-w-0">
-                          <span className="block truncate text-sm font-medium text-ink">
-                            {hit.title}
+                    <li
+                      key={hit.company_number}
+                      className="flex items-center justify-between gap-4 border-b border-line px-5 py-3 last:border-b-0"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-medium text-ink">
+                          {hit.title}
+                        </span>
+                        {hit.address_snippet && (
+                          <span className="block truncate text-xs text-muted">
+                            {hit.address_snippet}
                           </span>
-                          {hit.address_snippet && (
-                            <span className="block truncate text-xs text-muted">
-                              {hit.address_snippet}
-                            </span>
-                          )}
-                        </span>
-                        <span className="flex shrink-0 items-center gap-2">
-                          <StatusBadge status={hit.company_status} />
-                          <span className="num text-xs text-muted">{hit.company_number}</span>
-                        </span>
-                      </button>
+                        )}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-3">
+                        <StatusBadge status={hit.company_status} />
+                        <span className="num text-xs text-muted">{hit.company_number}</span>
+                        <button
+                          type="button"
+                          onClick={() => addCompany(hit)}
+                          disabled={added || full}
+                          className="btn-secondary"
+                        >
+                          {added ? "Added" : "Add"}
+                        </button>
+                      </span>
                     </li>
                   );
                 })}
@@ -214,137 +277,55 @@ export default function Page() {
 
       {error && <Banner tone="red">{error}</Banner>}
 
-      {loadingFilings && (
-        <p className="text-sm text-muted">Loading filings…</p>
-      )}
+      {picked.map((p) => (
+        <CompanyCard
+          key={p.profile.company_number}
+          picked={p}
+          onToggleFiling={toggleFiling}
+          onRemove={removeCompany}
+        />
+      ))}
 
-      {company && (
-        <section className="card">
-          <div className="card-header">
-            <div>
-              <h2 className="card-title">{company.company_name}</h2>
-              <p className="mt-0.5 text-xs text-muted">
-                <span className="num">{company.company_number}</span>
-                {company.company_type ? ` · ${company.company_type}` : ""}
-                {company.accounts_last_made_up_to
-                  ? ` · last accounts to ${company.accounts_last_made_up_to}`
-                  : ""}
-                {company.registered_office ? ` · ${company.registered_office}` : ""}
-              </p>
-            </div>
-            <StatusBadge status={company.company_status} />
+      {picked.length > 0 && (
+        <section className="card card-body space-y-3">
+          <div>
+            <label className="label" htmlFor="question">
+              Optional question for Claude
+            </label>
+            <textarea
+              id="question"
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              rows={2}
+              placeholder="e.g. Which of these has the strongest balance sheet, and why?"
+              className="input mt-2 resize-y"
+            />
           </div>
-
-          <FilingTable
-            companyNumber={company.company_number}
-            filings={filings}
-            selected={selected}
-            onToggle={toggle}
-          />
-
-          <div className="space-y-3 border-t border-line px-5 py-4">
-            <div>
-              <label className="label" htmlFor="question">
-                Optional question for Claude
-              </label>
-              <textarea
-                id="question"
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                rows={2}
-                placeholder="e.g. Is the cash position improving, and what is driving it?"
-                className="input mt-2 resize-y"
-              />
-            </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={analyse}
-                disabled={analysing || selected.length === 0 || claudeOff}
-                className="btn-primary"
-              >
-                {analysing
-                  ? `Reading filings… ${elapsed}s`
-                  : selected.length > 1
-                    ? `Compare ${selected.length} filings with Claude`
-                    : "Review filing with Claude"}
-              </button>
-              <span className="text-xs text-muted">
-                {selected.length} of {MAX_SELECTED} selected
-                {analysing && " · a few filings can take a minute or two"}
-              </span>
-            </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={run}
+              disabled={busy || readyCompanies.length === 0 || claudeOff}
+              className="btn-primary"
+            >
+              {busy
+                ? "Reviewing…"
+                : readyCompanies.length > 1
+                  ? `Review and compare ${readyCompanies.length} companies`
+                  : "Review with Claude"}
+            </button>
+            <span className="text-xs text-muted">
+              {readyCompanies.length}
+              {readyCompanies.length === 1 ? " company" : " companies"} · {filingCount}
+              {filingCount === 1 ? " filing" : " filings"}
+              {pageCount > 0 && ` · ${pageCount} pages`}
+              {cost && ` · ${cost} estimated`}
+            </span>
           </div>
         </section>
       )}
 
-      <div ref={resultRef}>
-        {analysis && (
-          <section className="card">
-            <div className="card-header">
-              <div>
-                <h2 className="card-title">Claude&rsquo;s review</h2>
-                <p className="mt-0.5 text-xs text-muted">
-                  {analysis.filings
-                    .map((f) => `${f.made_up_to ?? f.date} (${fmtBytes(f.size_bytes)})`)
-                    .join(" · ")}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  navigator.clipboard.writeText(analysis.markdown);
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
-                }}
-                className="btn-secondary"
-              >
-                {copied ? "Copied" : "Copy Markdown"}
-              </button>
-            </div>
-            <div className="card-body">
-              <Markdown>{analysis.markdown}</Markdown>
-            </div>
-            <p className="border-t border-line px-5 py-3 text-xs text-subtle">
-              {analysis.model}
-              {analysis.input_tokens != null &&
-                ` · ${analysis.input_tokens.toLocaleString()} in / ${analysis.output_tokens?.toLocaleString()} out tokens`}
-              . Figures are read from the filed PDFs — check anything you rely on against
-              the source document.
-            </p>
-          </section>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function StatusBadge({ status }: { status?: string | null }) {
-  if (!status) return null;
-  const tone =
-    status === "active"
-      ? "badge-green"
-      : status === "dissolved" || status.includes("liquidation")
-        ? "badge-amber"
-        : "badge-neutral";
-  return <span className={tone}>{status.replace(/-/g, " ")}</span>;
-}
-
-function Banner({
-  tone,
-  children,
-}: {
-  tone: "red" | "amber";
-  children: React.ReactNode;
-}) {
-  const tones = {
-    red: "border-red-200 bg-red-50 text-red-800 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-200",
-    amber:
-      "border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200",
-  };
-  return (
-    <div className={`rounded-lg border px-4 py-3 text-sm shadow-card ${tones[tone]}`}>
-      {children}
+      <div ref={resultsRef}>{job && <ResultsPanel job={job} />}</div>
     </div>
   );
 }

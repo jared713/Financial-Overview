@@ -39,6 +39,39 @@ export type FilingFeatures = {
   model?: string | null;
 };
 
+export const MAX_COMPANIES = 5;
+export const MAX_FILINGS_PER_COMPANY = 4;
+
+export type AnalysedFiling = {
+  transaction_id: string;
+  made_up_to?: string | null;
+  date?: string | null;
+  description?: string | null;
+  size_bytes: number;
+};
+
+export type CompanyRun = {
+  company_number: string;
+  company_name: string;
+  status: "pending" | "running" | "done" | "error";
+  filings: AnalysedFiling[];
+  markdown?: string | null;
+  error?: string | null;
+};
+
+export type AnalysisJob = {
+  id: string;
+  status: "running" | "done" | "error";
+  companies: CompanyRun[];
+  finished: number;
+  total: number;
+  comparison_markdown?: string | null;
+  comparison_error?: string | null;
+  model?: string | null;
+  input_tokens: number;
+  output_tokens: number;
+};
+
 export type FilingAnalysis = {
   company_number: string;
   company_name: string;
@@ -82,6 +115,19 @@ export const api = {
     apiFetch<CompanyProfile>(`/companies/${companyNumber}`),
   companyFilings: (companyNumber: string) =>
     apiFetch<Filing[]>(`/companies/${companyNumber}/filings`),
+  startAnalysis: (
+    companies: { company_number: string; transaction_ids: string[] }[],
+    question?: string,
+  ) =>
+    apiFetch<AnalysisJob>("/analyses", {
+      method: "POST",
+      body: JSON.stringify({
+        companies,
+        question: question?.trim() ? question.trim() : null,
+      }),
+    }),
+  analysis: (jobId: string) => apiFetch<AnalysisJob>(`/analyses/${jobId}`),
+
   analyseFilings: (
     companyNumber: string,
     transactionIds: string[],
@@ -99,6 +145,25 @@ export const api = {
 /** Direct link to the filing PDF, proxied by the API (Companies House needs an API key). */
 export function filingPdfUrl(companyNumber: string, transactionId: string): string {
   return `${API_URL}/companies/${companyNumber}/filings/${transactionId}/pdf`;
+}
+
+/** Input price per million tokens, for the rough pre-flight cost estimate.
+ *  Keep in step with the model set in ANTHROPIC_MODEL on the API. */
+const INPUT_PRICE_PER_MTOK: Record<string, number> = {
+  "claude-opus-5": 5,
+  "claude-sonnet-5": 2,
+  "claude-haiku-4-5": 1,
+};
+
+/** A filing page costs roughly 1.5k-3k tokens once rendered as text + image. */
+const TOKENS_PER_PAGE = 2200;
+
+export function estimateCost(pages: number, model?: string | null): string | null {
+  const price = INPUT_PRICE_PER_MTOK[model ?? "claude-opus-5"];
+  if (!price || pages <= 0) return null;
+  const dollars = (pages * TOKENS_PER_PAGE * price) / 1_000_000;
+  if (dollars < 0.1) return "under $0.10";
+  return `~$${dollars.toFixed(dollars < 10 ? 2 : 0)}`;
 }
 
 export function fmtBytes(bytes: number): string {

@@ -60,3 +60,35 @@ class AnalysisOut(BaseModel):
     model: str
     input_tokens: int | None = None
     output_tokens: int | None = None
+
+
+class CompanySelection(BaseModel):
+    company_number: str
+    transaction_ids: list[str] = Field(min_length=1, max_length=4)
+
+
+class AnalysisRequest(BaseModel):
+    companies: list[CompanySelection] = Field(min_length=1, max_length=5)
+    question: str | None = None
+
+
+class CompanyRunOut(BaseModel):
+    company_number: str
+    company_name: str
+    status: str
+    filings: list[AnalysedFiling] = []
+    markdown: str | None = None
+    error: str | None = None
+
+
+class AnalysisJobOut(BaseModel):
+    id: str
+    status: str
+    companies: list[CompanyRunOut]
+    finished: int
+    total: int
+    comparison_markdown: str | None = None
+    comparison_error: str | None = None
+    model: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
