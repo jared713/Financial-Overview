@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routers import analyses, companies
+from app.routers import analyses, companies, industry
 
 log = logging.getLogger("financial-overview")
 logging.basicConfig(level=logging.INFO)
@@ -26,6 +26,7 @@ app.add_middleware(
 
 app.include_router(companies.router)
 app.include_router(analyses.router)
+app.include_router(industry.router)
 
 
 @app.get("/healthz")

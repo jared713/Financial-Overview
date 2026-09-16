@@ -44,6 +44,7 @@ export function SavedDrawer({
     setBusyId(item.id);
     try {
       if (item.kind === "analysis") await api.deleteAnalysis(item.id);
+      else if (item.kind === "industry") await api.deleteIndustry(item.id);
       else await api.deleteComparison(item.id);
       setItems((current) => (current ?? []).filter((i) => i.id !== item.id));
     } catch (e) {
@@ -103,8 +104,8 @@ export function SavedDrawer({
                       {item.subtitle}
                     </p>
                     <p className="mt-1 flex items-center gap-1.5 text-xs text-subtle">
-                      <span className={item.kind === "comparison" ? "badge-violet" : "badge-neutral"}>
-                        {item.kind === "comparison" ? "comparison" : "company"}
+                      <span className={item.kind === "analysis" ? "badge-neutral" : "badge-violet"}>
+                        {item.kind}
                       </span>
                       {item.research && <span className="badge-neutral">web</span>}
                       {item.status === "error" && <span className="badge-amber">failed</span>}

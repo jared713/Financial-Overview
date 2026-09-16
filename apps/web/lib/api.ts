@@ -41,8 +41,23 @@ export type FilingFeatures = {
   saving_is_durable: boolean;
 };
 
+export type IndustryDocument = { filename: string; size_bytes: number };
+
+export type IndustryAnalysis = {
+  id: string;
+  status: RunStatus;
+  title: string;
+  prompt?: string | null;
+  documents: IndustryDocument[];
+  markdown?: string | null;
+  error?: string | null;
+  model?: string | null;
+  input_tokens: number;
+  output_tokens: number;
+};
+
 export type SavedItem = {
-  kind: "analysis" | "comparison";
+  kind: "analysis" | "comparison" | "industry";
   id: string;
   created_at: number;
   title: string;
@@ -157,6 +172,31 @@ export const api = {
       }),
     }),
   comparison: (id: string) => apiFetch<Comparison>(`/analyses/compare/${id}`),
+
+  /** Multipart, so this one cannot go through apiFetch — the browser has to set
+   *  its own Content-Type with the boundary. */
+  analyseIndustry: async (
+    title: string,
+    prompt: string,
+    files: File[],
+  ): Promise<IndustryAnalysis> => {
+    const form = new FormData();
+    form.append("title", title);
+    if (prompt.trim()) form.append("prompt", prompt.trim());
+    for (const file of files) form.append("files", file);
+    const res = await fetch(`${API_URL}/industry`, { method: "POST", body: form });
+    if (!res.ok) {
+      const detail = await res
+        .json()
+        .then((b) => (typeof b?.detail === "string" ? b.detail : null))
+        .catch(() => null);
+      throw new Error(detail ?? `Upload failed: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+  },
+  industry: (id: string) => apiFetch<IndustryAnalysis>(`/industry/${id}`),
+  deleteIndustry: (id: string) =>
+    apiFetch<void>(`/industry/${id}`, { method: "DELETE" }),
 
   saved: () => apiFetch<SavedItem[]>("/analyses"),
   deleteAnalysis: (id: string) =>

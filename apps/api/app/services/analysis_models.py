@@ -75,3 +75,26 @@ class Comparison:
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+
+
+@dataclass
+class IndustryDocumentRef:
+    """What was uploaded. The files themselves are not kept — only the result."""
+
+    filename: str
+    size_bytes: int = 0
+
+
+@dataclass
+class IndustryAnalysis:
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    title: str = ""
+    prompt: str | None = None
+    status: str = "running"  # running | done | error
+    created_at: float = field(default_factory=time.time)
+    documents: list[IndustryDocumentRef] = field(default_factory=list)
+    markdown: str | None = None
+    error: str | None = None
+    model: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0

@@ -124,3 +124,21 @@ class SavedItem(BaseModel):
     subtitle: str = ""
     status: str
     research: bool = False
+
+
+class IndustryDocumentOut(BaseModel):
+    filename: str
+    size_bytes: int = 0
+
+
+class IndustryAnalysisOut(BaseModel):
+    id: str
+    status: str
+    title: str
+    prompt: str | None = None
+    documents: list[IndustryDocumentOut] = []
+    markdown: str | None = None
+    error: str | None = None
+    model: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0

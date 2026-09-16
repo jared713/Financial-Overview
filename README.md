@@ -1,7 +1,13 @@
 # Financial Overview
 
-Search UK companies at Companies House, pull their filed statutory accounts as PDFs,
-and have Claude review and compare them.
+Two workspaces, sharing one saved library.
+
+**Companies** — search UK companies at Companies House, pull their filed statutory
+accounts as PDFs, and have Claude review and compare them.
+
+**Industries** — upload the documents you already have about a market (a government
+review, a regulator's report, a trade survey), say what you want out of them, and get a
+write-up grounded in those documents alone.
 
 Work one company at a time in the left-hand rail: add it, tick up to **4 years** of
 accounts, and analyse it. Claude reads the actual filed PDFs and the write-up opens in its
@@ -37,6 +43,17 @@ Everything you run is **kept until you delete it**. The **Saved** button opens t
 library — every analysis and comparison, newest first, each with Open and Delete. Storage
 is SQLite in `DATA_DIR`; mount a Railway volume there and it survives redeploys.
 
+## Industry analysis
+
+Upload up to 8 files (PDF or plain text, 20MB total), name the industry, and give an
+instruction — "size the market and flag the policy risks" — or leave it blank for a
+general summary. Claude is told to attribute every figure to the document it came from,
+to label its own inferences as inferences rather than sourced claims, and to say what the
+documents do not cover, including where a source's own interests colour what it reports.
+
+Uploaded files are read into the request and then dropped. Only the filenames and the
+write-up are stored.
+
 ## Stack
 
 - **Backend** (`apps/api`): FastAPI, deployed to Railway. SQLite on a mounted volume for
@@ -52,13 +69,13 @@ is SQLite in `DATA_DIR`; mount a Railway volume there and it survives redeploys.
 apps/
   api/         FastAPI service
     app/
-      routers/       /companies, /analyses
+      routers/       /companies, /analyses, /industry
       schemas/       Pydantic response models
       services/      Companies House client, Claude filing analysis,
-                     web research, ownership, run jobs, SQLite store
+                     web research, ownership, industry, run jobs, SQLite store
     tests/
   web/         Next.js app
-    app/             the search + review page
+    app/             / (companies) and /industry
     components/
     lib/
 docs/          Setup and deploy guides
@@ -99,7 +116,10 @@ cd apps/web && npm install && npm run dev
 | GET | `/analyses/company/{id}` | Poll that company's review |
 | POST | `/analyses/compare` | Compare finished analyses: `{analysis_ids: [], guidance?}` |
 | GET | `/analyses/compare/{id}` | Poll the comparison |
-| GET | `/analyses` | The saved library, newest first |
+| POST | `/industry` | Upload documents (multipart) and start an industry analysis |
+| GET | `/industry/{id}` | Poll an industry analysis |
+| DELETE | `/industry/{id}` | Delete a saved industry analysis |
+| GET | `/analyses` | The saved library, newest first — companies and industries |
 | DELETE | `/analyses/company/{id}` | Delete a saved analysis |
 | DELETE | `/analyses/compare/{id}` | Delete a saved comparison |
 | POST | `/companies/{number}/analyse` | Single company, synchronous → Markdown review |

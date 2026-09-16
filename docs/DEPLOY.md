@@ -61,7 +61,8 @@ returning 200.
 
 ## Costs and timeouts
 
-- Companies House API is free (600 requests / 5 minutes).
+- Companies House API is free (600 requests / 5 minutes), and the Industries workspace
+  does not use it at all.
 - Anthropic is the only per-use cost: roughly $0.30–$1.50 for two sets of full accounts,
   a few cents for small-company filings. `ANTHROPIC_MAX_TOKENS` caps the response.
 - Each company takes a minute or two, and the comparison another. That is why both are

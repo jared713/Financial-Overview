@@ -136,3 +136,23 @@ a company only needs analysing again if you change which years it covers.
 Filing documents are fetched by transaction id and re-checked against that company's
 filing history, so the document proxy can only reach filings that belong to the
 company in the path.
+
+## 7. Industry analysis
+
+The Industries workspace needs no Companies House key — only `ANTHROPIC_API_KEY`. You
+supply the documents.
+
+- **Formats**: PDF and plain text (`.txt`, `.md`, `.csv`, `.tsv`, `.json`). Anything else
+  is rejected with a message naming the file; export it to PDF first.
+- **Limits**: 8 files and 20MB per run, which is the request cap once base64 encoding is
+  taken into account. A single PDF can run to several hundred pages.
+- **The prompt drives the output.** Give it an instruction and it follows that structure;
+  leave it blank and it falls back to Summary / Key figures / What is driving it / Risks /
+  What the documents do not cover / Sources.
+- **Nothing is scraped or searched** — this side reads only what you upload, which is the
+  point: it is the material you trust, not whatever is on the web.
+- **The files are not stored.** They go into the request and are dropped; the saved record
+  holds the filenames, your prompt, and the write-up.
+
+Cost scales with pages, as with accounts: a 70-page government review is roughly 150k
+tokens, so about $0.75 at Opus rates.

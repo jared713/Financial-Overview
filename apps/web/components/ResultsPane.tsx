@@ -3,19 +3,22 @@
 import { useEffect, useRef, useState } from "react";
 import { Markdown } from "@/components/Markdown";
 import { fmtBytes } from "@/lib/api";
-import type { CompanyAnalysis, Comparison, RunStatus } from "@/lib/api";
+import type { CompanyAnalysis, Comparison, IndustryAnalysis, RunStatus } from "@/lib/api";
 
 export type ResultTab =
   | { kind: "comparison"; id: string; title: string; status: RunStatus; comparison: Comparison }
-  | { kind: "company"; id: string; title: string; status: RunStatus; analysis: CompanyAnalysis };
+  | { kind: "company"; id: string; title: string; status: RunStatus; analysis: CompanyAnalysis }
+  | { kind: "industry"; id: string; title: string; status: RunStatus; industry: IndustryAnalysis };
 
 export function ResultsPane({
   tabs,
   focusId,
+  empty,
 }: {
   tabs: ResultTab[];
   /** Set when a run is started, so the pane jumps to what you just asked for. */
   focusId: string | null;
+  empty?: React.ReactNode;
 }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const lastFocus = useRef<string | null>(null);
@@ -38,7 +41,7 @@ export function ResultsPane({
     );
   }, [tabs]);
 
-  if (tabs.length === 0) return <EmptyState />;
+  if (tabs.length === 0) return <>{empty ?? <EmptyState />}</>;
 
   const active = tabs.find((t) => t.id === activeId) ?? tabs[tabs.length - 1];
 
@@ -65,6 +68,8 @@ export function ResultsPane({
       <div className="card-body">
         {active.kind === "comparison" ? (
           <ComparisonBody comparison={active.comparison} />
+        ) : active.kind === "industry" ? (
+          <IndustryBody industry={active.industry} />
         ) : (
           <AnalysisBody analysis={active.analysis} />
         )}
@@ -91,6 +96,38 @@ function ComparisonBody({ comparison }: { comparison: Comparison }) {
       />
       <Markdown>{comparison.markdown ?? ""}</Markdown>
       <Footer model={comparison.model} input={comparison.input_tokens} output={comparison.output_tokens} />
+    </>
+  );
+}
+
+function IndustryBody({ industry }: { industry: IndustryAnalysis }) {
+  if (industry.status === "running") {
+    return <Waiting label={`Reading ${industry.documents.length} document(s)…`} />;
+  }
+  if (industry.status === "error") {
+    return <p className="text-sm text-red-600">{industry.error}</p>;
+  }
+  return (
+    <>
+      <Header
+        title={industry.title}
+        subtitle={industry.documents
+          .map((d) => `${d.filename} (${fmtBytes(d.size_bytes)})`)
+          .join(" · ")}
+        text={industry.markdown ?? ""}
+      />
+      {industry.prompt && (
+        <p className="mb-4 border-l-2 border-line pl-3 text-sm italic text-muted">
+          {industry.prompt}
+        </p>
+      )}
+      <Markdown>{industry.markdown ?? ""}</Markdown>
+      <Footer
+        model={industry.model}
+        input={industry.input_tokens}
+        output={industry.output_tokens}
+        caveat="Read from the documents you uploaded — check anything you rely on against the source."
+      />
     </>
   );
 }
@@ -166,17 +203,18 @@ function Footer({
   model,
   input,
   output,
+  caveat = "Figures are read from the filed PDFs — check anything you rely on against the source document.",
 }: {
   model?: string | null;
   input: number;
   output: number;
+  caveat?: string;
 }) {
   return (
     <p className="mt-6 border-t border-line pt-3 text-xs text-subtle">
       {model}
       {input > 0 && ` · ${input.toLocaleString()} in / ${output.toLocaleString()} out tokens`}
-      . Figures are read from the filed PDFs — check anything you rely on against the
-      source document.
+      . {caveat}
     </p>
   );
 }

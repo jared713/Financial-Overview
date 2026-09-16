@@ -20,7 +20,13 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from app.services.analysis_models import AnalysedFilingRef, CompanyAnalysis, Comparison
+from app.services.analysis_models import (
+    AnalysedFilingRef,
+    CompanyAnalysis,
+    Comparison,
+    IndustryAnalysis,
+    IndustryDocumentRef,
+)
 
 log = logging.getLogger("financial-overview.store")
 
@@ -59,6 +65,21 @@ CREATE TABLE IF NOT EXISTS comparisons (
     output_tokens INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS comparisons_created_at ON comparisons (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS industry_analyses (
+    id TEXT PRIMARY KEY,
+    created_at REAL NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    prompt TEXT,
+    status TEXT NOT NULL,
+    documents TEXT NOT NULL DEFAULT '[]',
+    markdown TEXT,
+    error TEXT,
+    model TEXT,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS industry_created_at ON industry_analyses (created_at DESC);
 """
 
 
@@ -163,6 +184,64 @@ class Store:
             )
             self._conn.commit()
 
+    def save_industry(self, analysis: IndustryAnalysis) -> None:
+        documents = json.dumps([vars(d) for d in analysis.documents])
+        with self._lock:
+            self._conn.execute(
+                """INSERT INTO industry_analyses (id, created_at, title, prompt, status,
+                       documents, markdown, error, model, input_tokens, output_tokens)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       status=excluded.status, markdown=excluded.markdown,
+                       error=excluded.error, model=excluded.model,
+                       input_tokens=excluded.input_tokens,
+                       output_tokens=excluded.output_tokens""",
+                (
+                    analysis.id,
+                    analysis.created_at,
+                    analysis.title,
+                    analysis.prompt,
+                    analysis.status,
+                    documents,
+                    analysis.markdown,
+                    analysis.error,
+                    analysis.model,
+                    analysis.input_tokens,
+                    analysis.output_tokens,
+                ),
+            )
+            self._conn.commit()
+
+    def get_industry(self, analysis_id: str) -> IndustryAnalysis | None:
+        row = self._conn.execute(
+            "SELECT * FROM industry_analyses WHERE id = ?", (analysis_id,)
+        ).fetchone()
+        if not row:
+            return None
+        return IndustryAnalysis(
+            id=row["id"],
+            created_at=row["created_at"],
+            title=row["title"],
+            prompt=row["prompt"],
+            status=row["status"],
+            documents=[
+                IndustryDocumentRef(**d) for d in json.loads(row["documents"] or "[]")
+            ],
+            markdown=row["markdown"],
+            error=row["error"],
+            model=row["model"],
+            input_tokens=row["input_tokens"],
+            output_tokens=row["output_tokens"],
+        )
+
+    def delete_industry(self, analysis_id: str) -> bool:
+        with self._lock:
+            cursor = self._conn.execute(
+                "DELETE FROM industry_analyses WHERE id = ?", (analysis_id,)
+            )
+            self._conn.commit()
+            return cursor.rowcount > 0
+
     def delete_analysis(self, analysis_id: str) -> bool:
         with self._lock:
             cursor = self._conn.execute("DELETE FROM analyses WHERE id = ?", (analysis_id,))
@@ -223,6 +302,25 @@ class Store:
                     "created_at": row["created_at"],
                     "title": f"Comparison of {len(names)}" if names else "Comparison",
                     "subtitle": " · ".join(names),
+                    "status": row["status"],
+                    "research": False,
+                }
+            )
+        for row in self._conn.execute(
+            """SELECT id, created_at, title, status, documents FROM industry_analyses
+               ORDER BY created_at DESC LIMIT ?""",
+            (limit,),
+        ):
+            names = [d.get("filename", "") for d in json.loads(row["documents"] or "[]")]
+            items.append(
+                {
+                    "kind": "industry",
+                    "id": row["id"],
+                    "created_at": row["created_at"],
+                    "title": row["title"] or "Industry analysis",
+                    "subtitle": f"{len(names)} document(s): " + ", ".join(names[:3])
+                    if names
+                    else "",
                     "status": row["status"],
                     "research": False,
                 }

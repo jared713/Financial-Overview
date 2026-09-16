@@ -355,7 +355,7 @@ export default function Page() {
         <div className="mx-auto w-full max-w-5xl space-y-4">
           <header className="flex flex-wrap items-start justify-between gap-3">
             <div>
-              <h1 className="page-title">UK company accounts</h1>
+              <h1 className="page-title">UK company analysis</h1>
               <p className="page-subtitle">
                 Analyse companies one at a time, then compare them when you are ready.
               </p>

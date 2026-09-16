@@ -24,7 +24,13 @@ import logging
 import time
 
 from app.config import Settings
-from app.services.analysis_models import AnalysedFilingRef, CompanyAnalysis, Comparison
+from app.services.analysis_models import (
+    AnalysedFilingRef,
+    CompanyAnalysis,
+    Comparison,
+    IndustryAnalysis,
+    IndustryDocumentRef,
+)
 from app.services.companies_house import CompaniesHouseClient, CompaniesHouseError, Filing
 from app.services.company_research import research_company
 from app.services.filing_analysis import (
@@ -32,6 +38,7 @@ from app.services.filing_analysis import (
     analyse_filings,
     compare_companies,
 )
+from app.services.industry import UploadedDocument, analyse_industry
 from app.services.ownership import analyse_ownership
 from app.services.store import get_store
 
@@ -44,13 +51,14 @@ CACHE_TTL_SECONDS = 4 * 60 * 60
 
 _analyses: dict[str, CompanyAnalysis] = {}
 _comparisons: dict[str, Comparison] = {}
+_industries: dict[str, IndustryAnalysis] = {}
 
 
 def _prune() -> None:
     """Drop old entries from the in-memory cache. Nothing is lost — finished runs
     are in the store, and get_analysis reads through to it."""
     cutoff = time.time() - CACHE_TTL_SECONDS
-    for cache in (_analyses, _comparisons):
+    for cache in (_analyses, _comparisons, _industries):
         for key, value in list(cache.items()):
             if value.created_at < cutoff:
                 cache.pop(key, None)
@@ -64,6 +72,15 @@ def get_analysis(analysis_id: str) -> CompanyAnalysis | None:
 
 def get_comparison(comparison_id: str) -> Comparison | None:
     return _comparisons.get(comparison_id) or get_store().get_comparison(comparison_id)
+
+
+def get_industry(analysis_id: str) -> IndustryAnalysis | None:
+    return _industries.get(analysis_id) or get_store().get_industry(analysis_id)
+
+
+def delete_industry(analysis_id: str) -> bool:
+    _industries.pop(analysis_id, None)
+    return get_store().delete_industry(analysis_id)
 
 
 def list_saved(limit: int = 200):
@@ -262,3 +279,57 @@ def start_comparison(
     _comparisons[comparison.id] = comparison
     asyncio.create_task(_run_comparison(comparison, analyses, settings))
     return comparison
+
+
+async def _run_industry(
+    analysis: IndustryAnalysis, documents: list[UploadedDocument], settings: Settings
+) -> None:
+    try:
+        result = await analyse_industry(
+            title=analysis.title,
+            prompt=analysis.prompt,
+            documents=documents,
+            api_key=settings.anthropic_api_key,
+            model=settings.anthropic_model,
+            max_tokens=settings.anthropic_max_tokens,
+        )
+        analysis.markdown = result.markdown
+        analysis.model = result.model
+        analysis.input_tokens = result.input_tokens or 0
+        analysis.output_tokens = result.output_tokens or 0
+        analysis.status = "done"
+    except FilingAnalysisError as e:
+        analysis.status = "error"
+        analysis.error = str(e)
+    except Exception as e:
+        log.exception("Industry analysis %s failed", analysis.id)
+        analysis.status = "error"
+        analysis.error = f"Unexpected error: {e}"
+    finally:
+        try:
+            get_store().save_industry(analysis)
+        except Exception:
+            log.exception("Could not save industry analysis %s", analysis.id)
+
+
+def start_industry_analysis(
+    *,
+    title: str,
+    prompt: str | None,
+    documents: list[UploadedDocument],
+    settings: Settings,
+) -> IndustryAnalysis:
+    """The uploaded files are read into the request and then dropped — only the
+    filenames and the write-up are kept."""
+    _prune()
+    analysis = IndustryAnalysis(
+        title=title,
+        prompt=prompt,
+        documents=[
+            IndustryDocumentRef(filename=d.filename, size_bytes=len(d.content))
+            for d in documents
+        ],
+    )
+    _industries[analysis.id] = analysis
+    asyncio.create_task(_run_industry(analysis, documents, settings))
+    return analysis
