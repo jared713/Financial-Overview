@@ -43,8 +43,9 @@ To keep saved work:
 2. Mount path: `/data` (matching `DATA_DIR`).
 3. Redeploy. The startup log prints the store path and whether it is durable.
 
-A few MB covers thousands of analyses — the rows are Markdown, and filing PDFs are not
-kept. To back it up, or move it, copy `/data/financial-overview.sqlite3` (and the `-wal`
+Documents uploaded for industry analysis live alongside the database in
+`/data/documents/`, since revisions re-read them. Budget for those: the Markdown rows are
+tiny, but a few dozen government PDFs is a few hundred MB. Filing PDFs are never kept. To back it up, or move it, copy `/data/financial-overview.sqlite3` (and the `-wal`
 file alongside it) via a Railway shell.
 
 ## Vercel — Web

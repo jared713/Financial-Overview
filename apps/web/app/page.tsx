@@ -91,7 +91,12 @@ export default function Page() {
           )}
           {error && <Banner tone="red">{error}</Banner>}
 
-          <ResultsPane tabs={companies.tabs} focusId={companies.focusId} />
+          <ResultsPane
+            tabs={companies.tabs}
+            focusId={companies.focusId}
+            onRefine={companies.refine}
+            onDeleteRevision={companies.deleteRevision}
+          />
         </div>
       </main>
 

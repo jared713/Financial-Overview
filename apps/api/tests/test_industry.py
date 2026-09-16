@@ -150,3 +150,105 @@ def test_upload_requires_a_title(client):
 def test_missing_industry_analysis_is_404(client):
     assert client.get("/industry/nope").status_code == 404
     assert client.delete("/industry/nope").status_code == 404
+
+
+def test_industry_refinement_adds_documents_and_threads(client, isolated_store, monkeypatch):
+    """The revision reads the original uploads plus the new ones."""
+    seen: list[dict] = []
+
+    async def fake_refine(**kwargs):
+        seen.append(
+            {
+                "documents": [d.filename for d in kwargs["documents"]],
+                "new": kwargs["new_filenames"],
+                "previous": kwargs["previous"],
+                "instruction": kwargs["instruction"],
+            }
+        )
+        return AnalysisResult(markdown="## Summary\nRevised.", model="claude-test")
+
+    monkeypatch.setattr(analysis_jobs, "refine_industry", fake_refine)
+
+    first = client.post(
+        "/industry",
+        data={"title": "UK EdTech", "prompt": "Size the market."},
+        files=[("files", ("review.pdf", b"%PDF-1.4 one", "application/pdf"))],
+    ).json()
+
+    revision = client.post(
+        f"/industry/{first['id']}/refine",
+        data={"instruction": "Now focus on funding routes."},
+        files=[("files", ("funding.pdf", b"%PDF-1.4 two", "application/pdf"))],
+    )
+    assert revision.status_code == 202
+    body = revision.json()
+    assert body["parent_id"] == first["id"]
+    assert body["root_id"] == first["id"]
+    assert body["instruction"] == "Now focus on funding routes."
+
+    call = seen[0]
+    assert sorted(call["documents"]) == ["funding.pdf", "review.pdf"]
+    assert call["new"] == ["funding.pdf"]
+    assert call["previous"] == "## Summary\nUK EdTech reviewed."
+
+    thread = client.get(f"/industry/{first['id']}/thread").json()
+    assert [a["id"] for a in thread] == [first["id"], body["id"]]
+    # The library shows the head with its revision count, not both rows.
+    listing = client.get("/analyses").json()
+    assert [i["id"] for i in listing] == [first["id"]]
+    assert listing[0]["revisions"] == 2
+
+
+def test_industry_refinement_without_new_documents_still_reads_the_originals(
+    client, isolated_store, monkeypatch
+):
+    seen: list[list[str]] = []
+
+    async def fake_refine(**kwargs):
+        seen.append([d.filename for d in kwargs["documents"]])
+        return AnalysisResult(markdown="Revised.", model="claude-test")
+
+    monkeypatch.setattr(analysis_jobs, "refine_industry", fake_refine)
+    first = client.post(
+        "/industry",
+        data={"title": "UK EdTech"},
+        files=[("files", ("review.pdf", b"%PDF one", "application/pdf"))],
+    ).json()
+
+    resp = client.post(
+        f"/industry/{first['id']}/refine", data={"instruction": "Shorter please."}
+    )
+    assert resp.status_code == 202
+    assert seen[0] == ["review.pdf"]
+
+
+def test_refining_rejects_a_blank_instruction_or_unfinished_analysis(client, isolated_store):
+    first = client.post(
+        "/industry",
+        data={"title": "UK EdTech"},
+        files=[("files", ("review.pdf", b"%PDF", "application/pdf"))],
+    ).json()
+    assert (
+        client.post(
+            f"/industry/{first['id']}/refine", data={"instruction": "  "}
+        ).status_code
+        == 400
+    )
+    assert (
+        client.post("/industry/nope/refine", data={"instruction": "more"}).status_code
+        == 404
+    )
+
+
+def test_deleting_the_head_removes_the_uploaded_documents(client, isolated_store):
+    from app.services.document_store import get_document_store
+
+    first = client.post(
+        "/industry",
+        data={"title": "UK EdTech"},
+        files=[("files", ("review.pdf", b"%PDF", "application/pdf"))],
+    ).json()
+    assert get_document_store().load_all(first["id"]) != []
+
+    assert client.delete(f"/industry/{first['id']}").status_code == 204
+    assert get_document_store().load_all(first["id"]) == []

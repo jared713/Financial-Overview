@@ -12,6 +12,7 @@ import type { Picked } from "@/components/CompanyRow";
 import type { ResultTab } from "@/components/ResultsPane";
 import { MAX_COMPANIES, MAX_FILINGS_PER_COMPANY, api } from "@/lib/api";
 import type {
+  CompanyAnalysis,
   CompanyHit,
   Comparison,
   FilingFeatures,
@@ -51,6 +52,8 @@ type Workspace = {
     tabs: ResultTab[];
     focusId: string | null;
     openSaved: (item: SavedItem) => Promise<void>;
+    refine: (tab: ResultTab, instruction: string, files: File[]) => Promise<void>;
+    deleteRevision: (tab: ResultTab, revisionId: string) => Promise<void>;
   };
 
   industry: {
@@ -66,6 +69,8 @@ type Workspace = {
     tabs: ResultTab[];
     focusId: string | null;
     openSaved: (item: SavedItem) => Promise<void>;
+    refine: (tab: ResultTab, instruction: string, files: File[]) => Promise<void>;
+    deleteRevision: (tab: ResultTab, revisionId: string) => Promise<void>;
   };
 };
 
@@ -89,7 +94,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [picked, setPicked] = useState<Picked[]>([]);
   const [guidance, setGuidance] = useState("");
   const [comparison, setComparison] = useState<Comparison | null>(null);
-  const [extraTabs, setExtraTabs] = useState<ResultTab[]>([]);
+  // Each thread is an analysis plus its revisions, oldest first.
+  const [companyThreads, setCompanyThreads] = useState<CompanyAnalysis[][]>([]);
   const [companyFocusId, setCompanyFocusId] = useState<string | null>(null);
 
   // Industries
@@ -97,7 +103,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [prompt, setPrompt] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [runs, setRuns] = useState<IndustryAnalysis[]>([]);
+  const [industryThreads, setIndustryThreads] = useState<IndustryAnalysis[][]>([]);
   const [industryFocusId, setIndustryFocusId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -107,7 +113,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   // Refs so the single polling timer always sees current state.
   const pickedRef = useRef<Picked[]>([]);
   const comparisonRef = useRef<Comparison | null>(null);
-  const runsRef = useRef<IndustryAnalysis[]>([]);
+  const companyThreadsRef = useRef<CompanyAnalysis[][]>([]);
+  const industryThreadsRef = useRef<IndustryAnalysis[][]>([]);
   useEffect(() => {
     pickedRef.current = picked;
   }, [picked]);
@@ -115,8 +122,11 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     comparisonRef.current = comparison;
   }, [comparison]);
   useEffect(() => {
-    runsRef.current = runs;
-  }, [runs]);
+    companyThreadsRef.current = companyThreads;
+  }, [companyThreads]);
+  useEffect(() => {
+    industryThreadsRef.current = industryThreads;
+  }, [industryThreads]);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stopPolling = useCallback(() => {
@@ -132,15 +142,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     pollRef.current = setInterval(async () => {
       let running = 0;
       try {
-        for (const p of pickedRef.current) {
-          if (p.analysis?.status === "running") {
+        for (const thread of companyThreadsRef.current) {
+          for (const revision of thread) {
+            if (revision.status !== "running") continue;
             running += 1;
-            const next = await api.companyAnalysis(p.analysis.id);
+            const next = await api.companyAnalysis(revision.id);
+            setCompanyThreads((threads) =>
+              threads.map((t) => t.map((r) => (r.id === next.id ? next : r))),
+            );
+            // The rail tracks the first analysis of each company.
             setPicked((list) =>
               list.map((item) =>
-                item.profile.company_number === p.profile.company_number
-                  ? { ...item, analysis: next }
-                  : item,
+                item.analysis?.id === next.id ? { ...item, analysis: next } : item,
               ),
             );
           }
@@ -149,11 +162,14 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           running += 1;
           setComparison(await api.comparison(comparisonRef.current.id));
         }
-        for (const industryRun of runsRef.current) {
-          if (industryRun.status === "running") {
+        for (const thread of industryThreadsRef.current) {
+          for (const revision of thread) {
+            if (revision.status !== "running") continue;
             running += 1;
-            const next = await api.industry(industryRun.id);
-            setRuns((list) => list.map((r) => (r.id === next.id ? next : r)));
+            const next = await api.industry(revision.id);
+            setIndustryThreads((threads) =>
+              threads.map((t) => t.map((r) => (r.id === next.id ? next : r))),
+            );
           }
         }
       } catch (e) {
@@ -311,6 +327,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
               : p,
           ),
         );
+        setCompanyThreads((threads) => [...threads, [analysis]]);
         setCompanyFocusId(analysis.id);
         ensurePolling();
       } catch (e) {
@@ -336,7 +353,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [ensurePolling, guidance]);
 
-  const companyTabs: ResultTab[] = [
+  const allCompanyTabs: ResultTab[] = [
     ...(comparison
       ? [
           {
@@ -348,19 +365,18 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           },
         ]
       : []),
-    ...picked
-      .filter((p) => p.analysis !== undefined)
-      .map((p) => ({
-        kind: "company" as const,
-        id: p.analysis!.id,
-        title: p.analysis!.company_name || p.profile.company_name,
-        status: p.analysis!.status,
-        analysis: p.analysis!,
-      })),
-  ];
-  const allCompanyTabs: ResultTab[] = [
-    ...companyTabs,
-    ...extraTabs.filter((t) => !companyTabs.some((live) => live.id === t.id)),
+    ...companyThreads
+      .filter((thread) => thread.length > 0)
+      .map((thread) => {
+        const latest = thread[thread.length - 1];
+        return {
+          kind: "company" as const,
+          id: thread[0].root_id,
+          title: latest.company_name || latest.company_number,
+          status: latest.status,
+          revisions: thread,
+        };
+      }),
   ];
 
   const openSavedCompany = useCallback(
@@ -373,37 +389,15 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
       setCompanyFocusId(item.id);
       try {
         if (item.kind === "analysis") {
-          const analysis = await api.companyAnalysis(item.id);
-          setExtraTabs((current) =>
-            current.some((t) => t.id === analysis.id)
-              ? current
-              : [
-                  ...current,
-                  {
-                    kind: "company",
-                    id: analysis.id,
-                    title: analysis.company_name || analysis.company_number,
-                    status: analysis.status,
-                    analysis,
-                  },
-                ],
+          const thread = await api.companyThread(item.id);
+          if (thread.length === 0) return;
+          setCompanyThreads((threads) =>
+            threads.some((t) => t[0]?.root_id === thread[0].root_id)
+              ? threads
+              : [...threads, thread],
           );
         } else {
-          const loaded = await api.comparison(item.id);
-          setExtraTabs((current) =>
-            current.some((t) => t.id === loaded.id)
-              ? current
-              : [
-                  ...current,
-                  {
-                    kind: "comparison",
-                    id: loaded.id,
-                    title: `Comparison · ${loaded.companies.length}`,
-                    status: loaded.status,
-                    comparison: loaded,
-                  },
-                ],
-          );
+          setComparison(await api.comparison(item.id));
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -420,7 +414,7 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     setError(null);
     try {
       const started = await api.analyseIndustry(title.trim(), prompt, files);
-      setRuns((current) => [...current, started]);
+      setIndustryThreads((threads) => [...threads, [started]]);
       setIndustryFocusId(started.id);
       // The files are in the request now; clear them so the next run starts fresh.
       setFiles([]);
@@ -440,22 +434,104 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
     }
     setIndustryFocusId(item.id);
     try {
-      const loaded = await api.industry(item.id);
-      setRuns((current) =>
-        current.some((r) => r.id === loaded.id) ? current : [...current, loaded],
+      const thread = await api.industryThread(item.id);
+      if (thread.length === 0) return;
+      setIndustryThreads((threads) =>
+        threads.some((t) => t[0]?.root_id === thread[0].root_id)
+          ? threads
+          : [...threads, thread],
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   }, []);
 
-  const industryTabs: ResultTab[] = runs.map((industryRun) => ({
-    kind: "industry" as const,
-    id: industryRun.id,
-    title: industryRun.title,
-    status: industryRun.status,
-    industry: industryRun,
-  }));
+  const refineCompany = useCallback(
+    async (tab: ResultTab, instruction: string) => {
+      if (tab.kind !== "company") return;
+      const latest = tab.revisions[tab.revisions.length - 1];
+      setError(null);
+      try {
+        const revision = await api.refineCompany(latest.id, instruction);
+        setCompanyThreads((threads) =>
+          threads.map((t) =>
+            t[0]?.root_id === revision.root_id ? [...t, revision] : t,
+          ),
+        );
+        setCompanyFocusId(revision.id);
+        ensurePolling();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [ensurePolling],
+  );
+
+  const refineIndustryRun = useCallback(
+    async (tab: ResultTab, instruction: string, addedFiles: File[]) => {
+      if (tab.kind !== "industry") return;
+      const latest = tab.revisions[tab.revisions.length - 1];
+      setError(null);
+      try {
+        const revision = await api.refineIndustry(latest.id, instruction, addedFiles);
+        setIndustryThreads((threads) =>
+          threads.map((t) =>
+            t[0]?.root_id === revision.root_id ? [...t, revision] : t,
+          ),
+        );
+        setIndustryFocusId(revision.id);
+        ensurePolling();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    },
+    [ensurePolling],
+  );
+
+  const deleteRevision = useCallback(async (tab: ResultTab, revisionId: string) => {
+    setError(null);
+    try {
+      if (tab.kind === "company") {
+        await api.deleteAnalysis(revisionId);
+        setCompanyThreads((threads) =>
+          threads
+            .map((t) => t.filter((r) => r.id !== revisionId))
+            .filter((t) => t.length > 0),
+        );
+        // The rail goes back to "Analyse" if its analysis was the one deleted.
+        setPicked((list) =>
+          list.map((item) =>
+            item.analysis?.id === revisionId
+              ? { ...item, analysis: undefined, analysedSelection: undefined }
+              : item,
+          ),
+        );
+      } else if (tab.kind === "industry") {
+        await api.deleteIndustry(revisionId);
+        setIndustryThreads((threads) =>
+          threads
+            .map((t) => t.filter((r) => r.id !== revisionId))
+            .filter((t) => t.length > 0),
+        );
+      }
+      setSavedReloadKey((n) => n + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  const industryTabs: ResultTab[] = industryThreads
+    .filter((thread) => thread.length > 0)
+    .map((thread) => {
+      const latest = thread[thread.length - 1];
+      return {
+        kind: "industry" as const,
+        id: thread[0].root_id,
+        title: latest.title,
+        status: latest.status,
+        revisions: thread,
+      };
+    });
 
   return (
     <WorkspaceContext.Provider
@@ -485,6 +561,8 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           tabs: allCompanyTabs,
           focusId: companyFocusId,
           openSaved: openSavedCompany,
+          refine: (tab, instruction) => refineCompany(tab, instruction),
+          deleteRevision,
         },
         industry: {
           title,
@@ -495,10 +573,12 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
           setFiles,
           uploading,
           run: runIndustry,
-          runs,
+          runs: industryThreads.flat(),
           tabs: industryTabs,
           focusId: industryFocusId,
           openSaved: openSavedIndustry,
+          refine: refineIndustryRun,
+          deleteRevision,
         },
       }}
     >

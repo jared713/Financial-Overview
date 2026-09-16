@@ -145,6 +145,129 @@ def build_industry_content(
     return content
 
 
+REFINE_SYSTEM_PROMPT = INDUSTRY_SYSTEM_PROMPT + """
+
+You are revising a write-up you produced earlier. The previous version and the source \
+documents are both given, along with what the reader wants changed.
+
+Produce the full revised write-up, not a description of what you changed and not a diff. \
+Carry forward everything that still holds — a request to add a section is not a request \
+to drop the others — and re-read the documents rather than working from your previous \
+wording alone, so a new angle is genuinely grounded rather than a paraphrase. Where new \
+documents have been added, say what they change. Where the request asks for something \
+the documents cannot support, say so in the revision rather than inventing it."""
+
+
+def build_refinement_content(
+    *,
+    title: str,
+    previous: str,
+    instruction: str,
+    documents: list[UploadedDocument],
+    new_filenames: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    added = set(new_filenames or [])
+    content: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": (
+                f"Industry: {title}\n\n"
+                f"{len(documents)} document(s) follow"
+                + (f", of which {len(added)} are newly added" if added else "")
+                + ", then the previous write-up, then what is being asked for."
+            ),
+        }
+    ]
+    for doc in documents:
+        label = f"--- Document: {doc.filename}"
+        if doc.filename in added:
+            label += " (newly added) ---"
+        else:
+            label += " ---"
+        content.append({"type": "text", "text": label})
+        if doc.is_pdf:
+            content.append(
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": PDF_TYPE,
+                        "data": base64.standard_b64encode(doc.content).decode("ascii"),
+                    },
+                }
+            )
+        else:
+            content.append(
+                {"type": "text", "text": doc.content.decode("utf-8", errors="replace")}
+            )
+
+    content.append({"type": "text", "text": f"--- Previous write-up ---\n\n{previous}"})
+    content.append(
+        {"type": "text", "text": f"What the reader wants changed:\n\n{instruction.strip()}"}
+    )
+    return content
+
+
+async def refine_industry(
+    *,
+    title: str,
+    previous: str,
+    instruction: str,
+    documents: list[UploadedDocument],
+    new_filenames: list[str] | None = None,
+    api_key: str | None,
+    model: str,
+    max_tokens: int = 8000,
+) -> AnalysisResult:
+    if not api_key:
+        raise FilingAnalysisError("ANTHROPIC_API_KEY is not configured", 503)
+    if not instruction.strip():
+        raise FilingAnalysisError("Say what you want changed", 400)
+    validate_documents(documents)
+
+    try:
+        from anthropic import AsyncAnthropic
+    except ImportError as e:  # pragma: no cover - dependency is declared
+        raise FilingAnalysisError(f"anthropic SDK not installed: {e}", 500) from e
+
+    client = AsyncAnthropic(api_key=api_key, timeout=600.0, max_retries=2)
+    content = build_refinement_content(
+        title=title,
+        previous=previous,
+        instruction=instruction,
+        documents=documents,
+        new_filenames=new_filenames,
+    )
+    log.info("Refining industry %r over %d document(s)", title, len(documents))
+    try:
+        message = await client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=REFINE_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": content}],
+        )
+    except Exception as e:
+        status = getattr(e, "status_code", None)
+        raise FilingAnalysisError(f"Claude revision failed: {e}", status or 502) from e
+
+    if message.stop_reason == "refusal":
+        raise FilingAnalysisError("Claude declined to revise this analysis", 502)
+
+    markdown = "\n".join(
+        block.text for block in message.content if getattr(block, "type", None) == "text"
+    ).strip()
+    if not markdown:
+        raise FilingAnalysisError("Claude returned an empty revision", 502)
+
+    usage = getattr(message, "usage", None)
+    return AnalysisResult(
+        markdown=markdown,
+        model=message.model,
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+    )
+
+
 async def analyse_industry(
     *,
     title: str,

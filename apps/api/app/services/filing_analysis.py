@@ -384,3 +384,113 @@ async def compare_companies(
         input_tokens=getattr(usage, "input_tokens", None),
         output_tokens=getattr(usage, "output_tokens", None),
     )
+
+
+REFINE_SYSTEM_PROMPT = SYSTEM_PROMPT + """
+
+You are revising a review you produced earlier. The filed accounts, the previous review \
+and what the reader wants changed are all given.
+
+Produce the full revised review, not a description of what you changed and not a diff. \
+Carry forward everything that still holds — a request for more on one thing is not a \
+request to drop the rest — and keep the sections that came from sources not re-supplied \
+here (the web write-up, the ownership record) intact unless the request bears on them. \
+Re-read the filings rather than working from your previous wording alone. Where the \
+request asks for something the filings do not disclose, say so in the revision rather \
+than estimating it."""
+
+
+def build_refinement_content(
+    documents: list[FilingDocument],
+    *,
+    company_name: str,
+    company_number: str,
+    previous: str,
+    instruction: str,
+) -> list[dict[str, Any]]:
+    content: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": (
+                f"Company: {company_name} (Companies House number {company_number}).\n"
+                f"{len(documents)} filing(s) follow, then the previous review, then what "
+                "is being asked for."
+            ),
+        }
+    ]
+    for doc in documents:
+        content.append({"type": "text", "text": _filing_label(doc)})
+        content.append(
+            {
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": base64.standard_b64encode(doc.content).decode("ascii"),
+                },
+            }
+        )
+    content.append({"type": "text", "text": f"--- Previous review ---\n\n{previous}"})
+    content.append(
+        {"type": "text", "text": f"What the reader wants changed:\n\n{instruction.strip()}"}
+    )
+    return content
+
+
+async def refine_filings_review(
+    documents: list[FilingDocument],
+    *,
+    company_name: str,
+    company_number: str,
+    previous: str,
+    instruction: str,
+    api_key: str | None,
+    model: str,
+    max_tokens: int = 8000,
+) -> AnalysisResult:
+    if not api_key:
+        raise FilingAnalysisError("ANTHROPIC_API_KEY is not configured", 503)
+    if not instruction.strip():
+        raise FilingAnalysisError("Say what you want changed", 400)
+
+    try:
+        from anthropic import AsyncAnthropic
+    except ImportError as e:  # pragma: no cover - dependency is declared
+        raise FilingAnalysisError(f"anthropic SDK not installed: {e}", 500) from e
+
+    client = AsyncAnthropic(api_key=api_key, timeout=600.0, max_retries=2)
+    content = build_refinement_content(
+        documents,
+        company_name=company_name,
+        company_number=company_number,
+        previous=previous,
+        instruction=instruction,
+    )
+    log.info("Refining review of %s (%s)", company_name, company_number)
+    try:
+        message = await client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=REFINE_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": content}],
+        )
+    except Exception as e:
+        status = getattr(e, "status_code", None)
+        raise FilingAnalysisError(f"Claude revision failed: {e}", status or 502) from e
+
+    if message.stop_reason == "refusal":
+        raise FilingAnalysisError("Claude declined to revise this review", 502)
+
+    markdown = "\n".join(
+        block.text for block in message.content if getattr(block, "type", None) == "text"
+    ).strip()
+    if not markdown:
+        raise FilingAnalysisError("Claude returned an empty revision", 502)
+
+    usage = getattr(message, "usage", None)
+    return AnalysisResult(
+        markdown=markdown,
+        model=message.model,
+        input_tokens=getattr(usage, "input_tokens", None),
+        output_tokens=getattr(usage, "output_tokens", None),
+    )

@@ -25,6 +25,12 @@ class AnalysedFilingRef:
 @dataclass
 class CompanyAnalysis:
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    # A refinement points back at what it revised; root_id groups the whole
+    # thread so it can be read back in order without walking the chain.
+    parent_id: str | None = None
+    root_id: str = ""
+    # What was asked for in this revision. None on the first one.
+    instruction: str | None = None
     company_number: str = ""
     company_name: str = ""
     status: str = "running"  # running | done | error
@@ -40,6 +46,10 @@ class CompanyAnalysis:
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.root_id:
+            self.root_id = self.id
 
     def as_summary(self) -> CompanySummary:
         """What the comparison reads: the web write-up first, then the accounts.
@@ -88,6 +98,9 @@ class IndustryDocumentRef:
 @dataclass
 class IndustryAnalysis:
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    parent_id: str | None = None
+    root_id: str = ""
+    instruction: str | None = None
     title: str = ""
     prompt: str | None = None
     status: str = "running"  # running | done | error
@@ -98,3 +111,7 @@ class IndustryAnalysis:
     model: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.root_id:
+            self.root_id = self.id

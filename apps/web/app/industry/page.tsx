@@ -62,6 +62,8 @@ export default function IndustryPage() {
             tabs={industry.tabs}
             focusId={industry.focusId}
             empty={<IndustryEmptyState />}
+            onRefine={industry.refine}
+            onDeleteRevision={industry.deleteRevision}
           />
         </div>
       </main>

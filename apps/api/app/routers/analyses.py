@@ -10,15 +10,18 @@ from app.schemas.companies import (
     ComparedCompany,
     CompareRequest,
     ComparisonOut,
+    RefineRequest,
     SavedItem,
 )
 from app.services.analysis_jobs import (
+    company_thread,
     delete_analysis,
     delete_comparison,
     get_analysis,
     get_comparison,
     list_saved,
     start_analysis,
+    start_company_refinement,
     start_comparison,
 )
 from app.services.analysis_models import CompanyAnalysis, Comparison
@@ -42,6 +45,10 @@ def _require_keys(settings: Settings) -> None:
 def _analysis_out(analysis: CompanyAnalysis) -> CompanyAnalysisOut:
     return CompanyAnalysisOut(
         id=analysis.id,
+        parent_id=analysis.parent_id,
+        root_id=analysis.root_id,
+        instruction=analysis.instruction,
+        created_at=analysis.created_at,
         status=analysis.status,
         company_number=analysis.company_number,
         company_name=analysis.company_name,
@@ -121,6 +128,41 @@ async def read_company_analysis(analysis_id: str) -> CompanyAnalysisOut:
         raise HTTPException(
             404, "Analysis not found — it may have expired or the API restarted"
         )
+    return _analysis_out(analysis)
+
+
+@router.get("/company/{analysis_id}/thread", response_model=list[CompanyAnalysisOut])
+async def read_company_thread(analysis_id: str) -> list[CompanyAnalysisOut]:
+    """An analysis and every revision of it, oldest first."""
+    analysis = get_analysis(analysis_id)
+    if analysis is None:
+        raise HTTPException(404, "Analysis not found")
+    return [_analysis_out(a) for a in company_thread(analysis.root_id)]
+
+
+@router.post(
+    "/company/{analysis_id}/refine",
+    response_model=CompanyAnalysisOut,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def refine_company_analysis(
+    analysis_id: str, payload: RefineRequest
+) -> CompanyAnalysisOut:
+    """Revise an analysis: the filings are re-read alongside the previous review."""
+    settings = get_settings()
+    _require_keys(settings)
+    if not payload.instruction.strip():
+        raise HTTPException(400, "Say what you want changed")
+    previous = get_analysis(analysis_id)
+    if previous is None:
+        raise HTTPException(404, "Analysis not found")
+    if previous.status != "done":
+        raise HTTPException(409, "That analysis has not finished yet")
+
+    analysis = start_company_refinement(
+        previous=previous, instruction=payload.instruction.strip(), settings=settings
+    )
+    log.info("Started refinement %s of %s", analysis.id, previous.id)
     return _analysis_out(analysis)
 
 

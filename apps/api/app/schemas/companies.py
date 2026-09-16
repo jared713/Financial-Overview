@@ -75,8 +75,16 @@ class AnalyseCompanyRequest(BaseModel):
     research: bool = True
 
 
+class RefineRequest(BaseModel):
+    instruction: str = Field(min_length=1, max_length=4000)
+
+
 class CompanyAnalysisOut(BaseModel):
     id: str
+    parent_id: str | None = None
+    root_id: str = ""
+    instruction: str | None = None
+    created_at: float = 0.0
     status: str
     company_number: str
     company_name: str
@@ -124,6 +132,7 @@ class SavedItem(BaseModel):
     subtitle: str = ""
     status: str
     research: bool = False
+    revisions: int = 1
 
 
 class IndustryDocumentOut(BaseModel):
@@ -133,6 +142,10 @@ class IndustryDocumentOut(BaseModel):
 
 class IndustryAnalysisOut(BaseModel):
     id: str
+    parent_id: str | None = None
+    root_id: str = ""
+    instruction: str | None = None
+    created_at: float = 0.0
     status: str
     title: str
     prompt: str | None = None

@@ -9,6 +9,11 @@ accounts as PDFs, and have Claude review and compare them.
 review, a regulator's report, a trade survey), say what you want out of them, and get a
 write-up grounded in those documents alone.
 
+Every analysis can be **refined**: a box above each finished write-up takes an
+instruction — "more on the debt", "shorter", "a different angle" — and, on the industry
+side, more documents. The revision appears **below** the current version rather than
+replacing it, so the thread is the working record; delete any version you no longer want.
+
 Both keep their state while you move between them: your company list, search results,
 uploaded files and open results are all still there when you switch back, and a run
 started on one side keeps going while you work on the other.
@@ -55,8 +60,9 @@ general summary. Claude is told to attribute every figure to the document it cam
 to label its own inferences as inferences rather than sourced claims, and to say what the
 documents do not cover, including where a source's own interests colour what it reports.
 
-Uploaded files are read into the request and then dropped. Only the filenames and the
-write-up are stored.
+Uploaded files are kept under the thread they belong to, so a revision can re-read them
+and new documents join the set rather than replacing it. Deleting the analysis deletes
+them.
 
 ## Stack
 
@@ -76,7 +82,8 @@ apps/
       routers/       /companies, /analyses, /industry
       schemas/       Pydantic response models
       services/      Companies House client, Claude filing analysis,
-                     web research, ownership, industry, run jobs, SQLite store
+                     web research, ownership, industry, run jobs,
+                     SQLite store, uploaded-document store
     tests/
   web/         Next.js app
     app/             / (companies) and /industry
@@ -118,10 +125,14 @@ cd apps/web && npm install && npm run dev
 | GET | `/companies/{number}/filings/{transaction_id}/pdf` | The filed PDF |
 | POST | `/analyses/company` | Start one company: `{company_number, transaction_ids, trading_name?, research?}` |
 | GET | `/analyses/company/{id}` | Poll that company's review |
+| GET | `/analyses/company/{id}/thread` | That analysis and every revision, oldest first |
+| POST | `/analyses/company/{id}/refine` | `{instruction}` → a revision in the same thread |
 | POST | `/analyses/compare` | Compare finished analyses: `{analysis_ids: [], guidance?}` |
 | GET | `/analyses/compare/{id}` | Poll the comparison |
 | POST | `/industry` | Upload documents (multipart) and start an industry analysis |
 | GET | `/industry/{id}` | Poll an industry analysis |
+| GET | `/industry/{id}/thread` | That analysis and every revision, oldest first |
+| POST | `/industry/{id}/refine` | `{instruction}` plus optional new files (multipart) |
 | DELETE | `/industry/{id}` | Delete a saved industry analysis |
 | GET | `/analyses` | The saved library, newest first — companies and industries |
 | DELETE | `/analyses/company/{id}` | Delete a saved analysis |

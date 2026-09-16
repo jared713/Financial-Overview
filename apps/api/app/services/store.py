@@ -33,6 +33,9 @@ log = logging.getLogger("financial-overview.store")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS analyses (
     id TEXT PRIMARY KEY,
+    parent_id TEXT,
+    root_id TEXT NOT NULL DEFAULT '',
+    instruction TEXT,
     created_at REAL NOT NULL,
     company_number TEXT NOT NULL,
     company_name TEXT NOT NULL DEFAULT '',
@@ -68,6 +71,9 @@ CREATE INDEX IF NOT EXISTS comparisons_created_at ON comparisons (created_at DES
 
 CREATE TABLE IF NOT EXISTS industry_analyses (
     id TEXT PRIMARY KEY,
+    parent_id TEXT,
+    root_id TEXT NOT NULL DEFAULT '',
+    instruction TEXT,
     created_at REAL NOT NULL,
     title TEXT NOT NULL DEFAULT '',
     prompt TEXT,
@@ -82,6 +88,13 @@ CREATE TABLE IF NOT EXISTS industry_analyses (
 CREATE INDEX IF NOT EXISTS industry_created_at ON industry_analyses (created_at DESC);
 """
 
+# Indexes over columns added after the fact, so they must wait until the
+# migration below has put those columns on an older file.
+THREAD_INDEXES = """
+CREATE INDEX IF NOT EXISTS analyses_root ON analyses (root_id, created_at);
+CREATE INDEX IF NOT EXISTS industry_root ON industry_analyses (root_id, created_at);
+"""
+
 
 class Store:
     def __init__(self, path: Path, durable: bool = True):
@@ -94,6 +107,7 @@ class Store:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(SCHEMA)
         self._add_missing_columns()
+        self._conn.executescript(THREAD_INDEXES)
         self._conn.commit()
 
     def _add_missing_columns(self) -> None:
@@ -105,7 +119,15 @@ class Store:
                 "research_error": "TEXT",
                 "ownership_markdown": "TEXT",
                 "ownership_error": "TEXT",
-            }
+                "parent_id": "TEXT",
+                "root_id": "TEXT NOT NULL DEFAULT ''",
+                "instruction": "TEXT",
+            },
+            "industry_analyses": {
+                "parent_id": "TEXT",
+                "root_id": "TEXT NOT NULL DEFAULT ''",
+                "instruction": "TEXT",
+            },
         }
         for table, columns in wanted.items():
             existing = {
@@ -115,6 +137,11 @@ class Store:
                 if name not in existing:
                     log.info("Adding column %s.%s", table, name)
                     self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {kind}")
+        # Rows written before threads existed are their own root.
+        for table in wanted:
+            self._conn.execute(
+                f"UPDATE {table} SET root_id = id WHERE root_id IS NULL OR root_id = ''"
+            )
 
     # --- writes -------------------------------------------------------
 
@@ -122,11 +149,12 @@ class Store:
         filings = json.dumps([vars(f) for f in analysis.filings])
         with self._lock:
             self._conn.execute(
-                """INSERT INTO analyses (id, created_at, company_number, company_name,
+                """INSERT INTO analyses (id, parent_id, root_id, instruction, created_at,
+                       company_number, company_name,
                        status, research, filings, markdown, error, research_markdown,
                        research_error, ownership_markdown, ownership_error, model,
                        input_tokens, output_tokens)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                        company_name=excluded.company_name, status=excluded.status,
                        filings=excluded.filings, markdown=excluded.markdown,
@@ -138,6 +166,9 @@ class Store:
                        output_tokens=excluded.output_tokens""",
                 (
                     analysis.id,
+                    analysis.parent_id,
+                    analysis.root_id,
+                    analysis.instruction,
                     analysis.created_at,
                     analysis.company_number,
                     analysis.company_name,
@@ -188,9 +219,10 @@ class Store:
         documents = json.dumps([vars(d) for d in analysis.documents])
         with self._lock:
             self._conn.execute(
-                """INSERT INTO industry_analyses (id, created_at, title, prompt, status,
+                """INSERT INTO industry_analyses (id, parent_id, root_id, instruction,
+                       created_at, title, prompt, status,
                        documents, markdown, error, model, input_tokens, output_tokens)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                        status=excluded.status, markdown=excluded.markdown,
                        error=excluded.error, model=excluded.model,
@@ -198,6 +230,9 @@ class Store:
                        output_tokens=excluded.output_tokens""",
                 (
                     analysis.id,
+                    analysis.parent_id,
+                    analysis.root_id,
+                    analysis.instruction,
                     analysis.created_at,
                     analysis.title,
                     analysis.prompt,
@@ -220,6 +255,9 @@ class Store:
             return None
         return IndustryAnalysis(
             id=row["id"],
+            parent_id=row["parent_id"],
+            root_id=row["root_id"] or row["id"],
+            instruction=row["instruction"],
             created_at=row["created_at"],
             title=row["title"],
             prompt=row["prompt"],
@@ -270,12 +308,41 @@ class Store:
         ).fetchone()
         return _comparison_from_row(row) if row else None
 
+    def list_company_thread(self, root_id: str) -> list[CompanyAnalysis]:
+        return [
+            _analysis_from_row(row)
+            for row in self._conn.execute(
+                "SELECT * FROM analyses WHERE root_id = ? ORDER BY created_at", (root_id,)
+            )
+        ]
+
+    def list_industry_thread(self, root_id: str) -> list[IndustryAnalysis]:
+        ids = [
+            row["id"]
+            for row in self._conn.execute(
+                "SELECT id FROM industry_analyses WHERE root_id = ? ORDER BY created_at",
+                (root_id,),
+            )
+        ]
+        return [a for a in (self.get_industry(i) for i in ids) if a is not None]
+
+    def _revision_counts(self, table: str) -> dict[str, int]:
+        return {
+            row["root_id"]: row["n"]
+            for row in self._conn.execute(
+                f"SELECT root_id, COUNT(*) AS n FROM {table} GROUP BY root_id"
+            )
+        }
+
     def list_saved(self, limit: int = 200) -> list[dict[str, Any]]:
         """Everything saved, newest first, without the markdown bodies."""
         items: list[dict[str, Any]] = []
+        company_revisions = self._revision_counts("analyses")
+        industry_revisions = self._revision_counts("industry_analyses")
+        # Only the head of each thread is listed; its revisions come with it.
         for row in self._conn.execute(
             """SELECT id, created_at, company_number, company_name, status, research
-               FROM analyses ORDER BY created_at DESC LIMIT ?""",
+               FROM analyses WHERE parent_id IS NULL ORDER BY created_at DESC LIMIT ?""",
             (limit,),
         ):
             items.append(
@@ -287,6 +354,7 @@ class Store:
                     "subtitle": row["company_number"],
                     "status": row["status"],
                     "research": bool(row["research"]),
+                    "revisions": company_revisions.get(row["id"], 1),
                 }
             )
         for row in self._conn.execute(
@@ -304,11 +372,12 @@ class Store:
                     "subtitle": " · ".join(names),
                     "status": row["status"],
                     "research": False,
+                    "revisions": 1,
                 }
             )
         for row in self._conn.execute(
             """SELECT id, created_at, title, status, documents FROM industry_analyses
-               ORDER BY created_at DESC LIMIT ?""",
+               WHERE parent_id IS NULL ORDER BY created_at DESC LIMIT ?""",
             (limit,),
         ):
             names = [d.get("filename", "") for d in json.loads(row["documents"] or "[]")]
@@ -323,6 +392,7 @@ class Store:
                     else "",
                     "status": row["status"],
                     "research": False,
+                    "revisions": industry_revisions.get(row["id"], 1),
                 }
             )
         items.sort(key=lambda item: item["created_at"], reverse=True)
@@ -332,6 +402,9 @@ class Store:
 def _analysis_from_row(row: sqlite3.Row) -> CompanyAnalysis:
     return CompanyAnalysis(
         id=row["id"],
+        parent_id=row["parent_id"],
+        root_id=row["root_id"] or row["id"],
+        instruction=row["instruction"],
         created_at=row["created_at"],
         company_number=row["company_number"],
         company_name=row["company_name"],

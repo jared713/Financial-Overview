@@ -151,8 +151,25 @@ supply the documents.
   What the documents do not cover / Sources.
 - **Nothing is scraped or searched** — this side reads only what you upload, which is the
   point: it is the material you trust, not whatever is on the web.
-- **The files are not stored.** They go into the request and are dropped; the saved record
-  holds the filenames, your prompt, and the write-up.
+- **The files are kept** with the analysis, so a revision can re-read them. They live
+  beside the database in `DATA_DIR/documents/<analysis id>/`, and deleting the analysis
+  deletes them.
 
 Cost scales with pages, as with accounts: a 70-page government review is roughly 150k
 tokens, so about $0.75 at Opus rates.
+
+## 8. Refining an analysis
+
+Every finished write-up — company or industry — has a box above it. Say what you want
+changed and the revision appears underneath, with the version it came from left in place.
+
+- The revision **re-reads the sources**, not just its own previous wording: the filings
+  for a company, the uploaded documents for an industry. That is what makes "take a
+  different angle" produce something genuinely different rather than a paraphrase, and it
+  means a revision costs roughly what the original did.
+- For a company, the web and ownership sections are **not** re-run — they are carried
+  through from the previous version, since re-searching the web on every wording change
+  would be wasteful. Re-analyse the company from the rail if you want those refreshed.
+- On the industry side you can **attach more documents** with the instruction. They join
+  the thread permanently, so later revisions see them too.
+- Each version has its own Delete. Removing the last one removes the analysis.

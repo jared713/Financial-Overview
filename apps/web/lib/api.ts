@@ -43,7 +43,7 @@ export type FilingFeatures = {
 
 export type IndustryDocument = { filename: string; size_bytes: number };
 
-export type IndustryAnalysis = {
+export type IndustryAnalysis = Threaded & {
   id: string;
   status: RunStatus;
   title: string;
@@ -64,6 +64,7 @@ export type SavedItem = {
   subtitle: string;
   status: RunStatus;
   research: boolean;
+  revisions: number;
 };
 
 export const MAX_COMPANIES = 5;
@@ -79,7 +80,17 @@ export type AnalysedFiling = {
 
 export type RunStatus = "running" | "done" | "error";
 
-export type CompanyAnalysis = {
+type Threaded = {
+  /** Set on a revision; null on the first analysis in a thread. */
+  parent_id?: string | null;
+  /** The id of the first analysis in the thread — the key for the whole chain. */
+  root_id: string;
+  /** What was asked for in this revision. */
+  instruction?: string | null;
+  created_at: number;
+};
+
+export type CompanyAnalysis = Threaded & {
   id: string;
   status: RunStatus;
   company_number: string;
@@ -163,6 +174,13 @@ export const api = {
       body: JSON.stringify(body),
     }),
   companyAnalysis: (id: string) => apiFetch<CompanyAnalysis>(`/analyses/company/${id}`),
+  companyThread: (id: string) =>
+    apiFetch<CompanyAnalysis[]>(`/analyses/company/${id}/thread`),
+  refineCompany: (id: string, instruction: string) =>
+    apiFetch<CompanyAnalysis>(`/analyses/company/${id}/refine`, {
+      method: "POST",
+      body: JSON.stringify({ instruction }),
+    }),
   compare: (analysisIds: string[], guidance?: string) =>
     apiFetch<Comparison>("/analyses/compare", {
       method: "POST",
@@ -195,6 +213,29 @@ export const api = {
     return res.json();
   },
   industry: (id: string) => apiFetch<IndustryAnalysis>(`/industry/${id}`),
+  industryThread: (id: string) =>
+    apiFetch<IndustryAnalysis[]>(`/industry/${id}/thread`),
+  refineIndustry: async (
+    id: string,
+    instruction: string,
+    files: File[],
+  ): Promise<IndustryAnalysis> => {
+    const form = new FormData();
+    form.append("instruction", instruction);
+    for (const file of files) form.append("files", file);
+    const res = await fetch(`${API_URL}/industry/${id}/refine`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) {
+      const detail = await res
+        .json()
+        .then((b) => (typeof b?.detail === "string" ? b.detail : null))
+        .catch(() => null);
+      throw new Error(detail ?? `Revision failed: ${res.status} ${res.statusText}`);
+    }
+    return res.json();
+  },
   deleteIndustry: (id: string) =>
     apiFetch<void>(`/industry/${id}`, { method: "DELETE" }),
 

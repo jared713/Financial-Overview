@@ -504,3 +504,144 @@ async def test_ownership_reaches_the_comparison(fake_backends):
 
     summaries = fake_backends["compare"][0]["summaries"]
     assert all("Jane Holder, 60%." in s for s in summaries)
+
+
+async def test_refinement_forms_a_thread_and_re_reads_the_filings(
+    monkeypatch, fake_backends
+):
+    refinements: list[dict] = []
+
+    async def fake_refine(documents, **kwargs):
+        refinements.append(
+            {
+                "filings": [d.filing.transaction_id for d in documents],
+                "previous": kwargs["previous"],
+                "instruction": kwargs["instruction"],
+            }
+        )
+        return AnalysisResult(markdown="revised review", model="claude-test")
+
+    monkeypatch.setattr(analysis_jobs, "refine_filings_review", fake_refine)
+
+    original = start_analysis(
+        company_number="00445790",
+        transaction_ids=["t-2024", "t-2023"],
+        trading_name=None,
+        research=False,
+        settings=SETTINGS,
+    )
+    await _settle()
+
+    revision = analysis_jobs.start_company_refinement(
+        previous=original, instruction="Say more about the debt", settings=SETTINGS
+    )
+    await _settle()
+
+    assert revision.status == "done"
+    assert revision.markdown == "revised review"
+    assert revision.parent_id == original.id
+    assert revision.root_id == original.root_id == original.id
+    assert revision.instruction == "Say more about the debt"
+    # The same filings are re-read, and the previous review is handed over.
+    assert refinements[0]["filings"] == ["t-2023", "t-2024"]
+    assert refinements[0]["previous"] == original.markdown
+
+    thread = analysis_jobs.company_thread(original.root_id)
+    assert [a.id for a in thread] == [original.id, revision.id]
+
+
+async def test_refining_a_refinement_stays_in_the_same_thread(monkeypatch, fake_backends):
+    async def fake_refine(documents, **kwargs):
+        return AnalysisResult(markdown=f"revision of: {kwargs['previous']}", model="t")
+
+    monkeypatch.setattr(analysis_jobs, "refine_filings_review", fake_refine)
+    original = start_analysis(
+        company_number="00445790",
+        transaction_ids=["t-2024"],
+        trading_name=None,
+        research=False,
+        settings=SETTINGS,
+    )
+    await _settle()
+    first = analysis_jobs.start_company_refinement(
+        previous=original, instruction="More on cash", settings=SETTINGS
+    )
+    await _settle()
+    second = analysis_jobs.start_company_refinement(
+        previous=first, instruction="Now shorter", settings=SETTINGS
+    )
+    await _settle()
+
+    assert second.parent_id == first.id
+    assert second.root_id == original.id
+    # Each revision builds on the one before, not on the original.
+    assert second.markdown == f"revision of: {first.markdown}"
+    assert [a.id for a in analysis_jobs.company_thread(original.id)] == [
+        original.id,
+        first.id,
+        second.id,
+    ]
+
+
+def test_refine_endpoint_rejects_an_unfinished_or_missing_analysis(client, fake_backends):
+    from app.services.analysis_models import CompanyAnalysis as Stored
+
+    running = Stored(id="running1", company_number="00445790", status="running")
+    analysis_jobs._analyses["running1"] = running
+    try:
+        assert (
+            client.post(
+                "/analyses/company/running1/refine", json={"instruction": "more"}
+            ).status_code
+            == 409
+        )
+        assert (
+            client.post(
+                "/analyses/company/nope/refine", json={"instruction": "more"}
+            ).status_code
+            == 404
+        )
+    finally:
+        analysis_jobs._analyses.pop("running1", None)
+
+
+def test_refine_endpoint_requires_an_instruction(client, fake_backends, isolated_store):
+    from app.services.analysis_models import CompanyAnalysis as Stored
+
+    isolated_store.save_analysis(
+        Stored(id="done1", company_number="00445790", status="done", markdown="x")
+    )
+    resp = client.post("/analyses/company/done1/refine", json={"instruction": "  "})
+    assert resp.status_code == 400
+    assert client.post(
+        "/analyses/company/done1/refine", json={"instruction": ""}
+    ).status_code == 422
+
+
+def test_thread_endpoint_returns_revisions_in_order(client, fake_backends, isolated_store):
+    from app.services.analysis_models import CompanyAnalysis as Stored
+
+    isolated_store.save_analysis(
+        Stored(id="r1", company_number="00445790", status="done", created_at=1.0)
+    )
+    isolated_store.save_analysis(
+        Stored(
+            id="r2",
+            parent_id="r1",
+            root_id="r1",
+            instruction="more",
+            company_number="00445790",
+            status="done",
+            created_at=2.0,
+        )
+    )
+    # Reachable from either end of the thread.
+    for entry in ("r1", "r2"):
+        thread = client.get(f"/analyses/company/{entry}/thread").json()
+        assert [a["id"] for a in thread] == ["r1", "r2"]
+        assert thread[1]["instruction"] == "more"
+
+    # The library lists the head only, with the revision count.
+    listing = client.get("/analyses").json()
+    assert [i["id"] for i in listing] == ["r1"]
+    assert listing[0]["revisions"] == 2

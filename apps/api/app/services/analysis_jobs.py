@@ -33,12 +33,14 @@ from app.services.analysis_models import (
 )
 from app.services.companies_house import CompaniesHouseClient, CompaniesHouseError, Filing
 from app.services.company_research import research_company
+from app.services.document_store import get_document_store
 from app.services.filing_analysis import (
     FilingAnalysisError,
     analyse_filings,
     compare_companies,
+    refine_filings_review,
 )
-from app.services.industry import UploadedDocument, analyse_industry
+from app.services.industry import UploadedDocument, analyse_industry, refine_industry
 from app.services.ownership import analyse_ownership
 from app.services.store import get_store
 
@@ -79,8 +81,37 @@ def get_industry(analysis_id: str) -> IndustryAnalysis | None:
 
 
 def delete_industry(analysis_id: str) -> bool:
+    existing = get_industry(analysis_id)
     _industries.pop(analysis_id, None)
-    return get_store().delete_industry(analysis_id)
+    removed = get_store().delete_industry(analysis_id)
+    # The uploads belong to the thread, so they go only when its head does and
+    # nothing else in the thread is left.
+    if (
+        removed
+        and existing
+        and existing.parent_id is None
+        and not industry_thread(existing.root_id)
+    ):
+        get_document_store().delete(existing.root_id)
+    return removed
+
+
+def company_thread(root_id: str) -> list[CompanyAnalysis]:
+    """Every revision of an analysis, oldest first. In-flight runs live in the
+    cache and are not in the store yet, so both are merged."""
+    saved = {a.id: a for a in get_store().list_company_thread(root_id)}
+    for analysis in _analyses.values():
+        if analysis.root_id == root_id:
+            saved[analysis.id] = analysis
+    return sorted(saved.values(), key=lambda a: a.created_at)
+
+
+def industry_thread(root_id: str) -> list[IndustryAnalysis]:
+    saved = {a.id: a for a in get_store().list_industry_thread(root_id)}
+    for analysis in _industries.values():
+        if analysis.root_id == root_id:
+            saved[analysis.id] = analysis
+    return sorted(saved.values(), key=lambda a: a.created_at)
 
 
 def list_saved(limit: int = 200):
@@ -319,17 +350,155 @@ def start_industry_analysis(
     documents: list[UploadedDocument],
     settings: Settings,
 ) -> IndustryAnalysis:
-    """The uploaded files are read into the request and then dropped — only the
-    filenames and the write-up are kept."""
+    """Uploads are kept under the thread's root so a later revision can re-read
+    them; deleting the analysis deletes them."""
     _prune()
+    analysis = IndustryAnalysis(title=title, prompt=prompt)
+    # Keep the uploads under the thread's root so revisions can re-read them.
+    store = get_document_store()
+    analysis.documents = [
+        IndustryDocumentRef(
+            filename=store.save(analysis.root_id, d.filename, d.content),
+            size_bytes=len(d.content),
+        )
+        for d in documents
+    ]
+    _industries[analysis.id] = analysis
+    asyncio.create_task(_run_industry(analysis, documents, settings))
+    return analysis
+
+
+async def _run_company_refinement(
+    analysis: CompanyAnalysis, previous: CompanyAnalysis, settings: Settings
+) -> None:
+    try:
+        client = CompaniesHouseClient(settings.companies_house_api_key or "")
+        all_filings = await client.list_account_filings(analysis.company_number, limit=100)
+        filings = _select_filings(
+            all_filings, [f.transaction_id for f in previous.filings]
+        )
+        documents = await client.fetch_filing_documents(filings)
+
+        result = await refine_filings_review(
+            documents,
+            company_name=analysis.company_name,
+            company_number=analysis.company_number,
+            previous=previous.markdown or "",
+            instruction=analysis.instruction or "",
+            api_key=settings.anthropic_api_key,
+            model=settings.anthropic_model,
+            max_tokens=settings.anthropic_max_tokens,
+        )
+        analysis.markdown = result.markdown
+        analysis.model = result.model
+        analysis.input_tokens = result.input_tokens or 0
+        analysis.output_tokens = result.output_tokens or 0
+        analysis.status = "done"
+    except (CompaniesHouseError, FilingAnalysisError) as e:
+        analysis.status = "error"
+        analysis.error = str(e)
+    except Exception as e:
+        log.exception("Refinement failed for %s", analysis.company_number)
+        analysis.status = "error"
+        analysis.error = f"Unexpected error: {e}"
+    finally:
+        try:
+            get_store().save_analysis(analysis)
+        except Exception:
+            log.exception("Could not save refinement %s", analysis.id)
+
+
+def start_company_refinement(
+    *, previous: CompanyAnalysis, instruction: str, settings: Settings
+) -> CompanyAnalysis:
+    """A revision re-reads the same filings, so it carries their refs forward.
+
+    The web and ownership sections are not re-run — they are already in the
+    previous write-up, which the revision is told to carry through.
+    """
+    _prune()
+    analysis = CompanyAnalysis(
+        parent_id=previous.id,
+        root_id=previous.root_id,
+        instruction=instruction,
+        company_number=previous.company_number,
+        company_name=previous.company_name,
+        research=previous.research,
+        filings=list(previous.filings),
+    )
+    _analyses[analysis.id] = analysis
+    asyncio.create_task(_run_company_refinement(analysis, previous, settings))
+    return analysis
+
+
+async def _run_industry_refinement(
+    analysis: IndustryAnalysis,
+    previous: IndustryAnalysis,
+    new_filenames: list[str],
+    settings: Settings,
+) -> None:
+    try:
+        stored = get_document_store().load_all(analysis.root_id)
+        documents = [
+            UploadedDocument(filename=name, content=content) for name, content in stored
+        ]
+        result = await refine_industry(
+            title=analysis.title,
+            previous=previous.markdown or "",
+            instruction=analysis.instruction or "",
+            documents=documents,
+            new_filenames=new_filenames,
+            api_key=settings.anthropic_api_key,
+            model=settings.anthropic_model,
+            max_tokens=settings.anthropic_max_tokens,
+        )
+        analysis.markdown = result.markdown
+        analysis.model = result.model
+        analysis.input_tokens = result.input_tokens or 0
+        analysis.output_tokens = result.output_tokens or 0
+        analysis.status = "done"
+    except FilingAnalysisError as e:
+        analysis.status = "error"
+        analysis.error = str(e)
+    except Exception as e:
+        log.exception("Industry refinement %s failed", analysis.id)
+        analysis.status = "error"
+        analysis.error = f"Unexpected error: {e}"
+    finally:
+        try:
+            get_store().save_industry(analysis)
+        except Exception:
+            log.exception("Could not save industry refinement %s", analysis.id)
+
+
+def start_industry_refinement(
+    *,
+    previous: IndustryAnalysis,
+    instruction: str,
+    added: list[UploadedDocument],
+    settings: Settings,
+) -> IndustryAnalysis:
+    """New documents join the thread's folder; the revision reads the lot."""
+    _prune()
+    documents = get_document_store()
+    new_filenames = [
+        documents.save(previous.root_id, doc.filename, doc.content) for doc in added
+    ]
+    stored = documents.load_all(previous.root_id)
+
     analysis = IndustryAnalysis(
-        title=title,
-        prompt=prompt,
+        parent_id=previous.id,
+        root_id=previous.root_id,
+        instruction=instruction,
+        title=previous.title,
+        prompt=previous.prompt,
         documents=[
-            IndustryDocumentRef(filename=d.filename, size_bytes=len(d.content))
-            for d in documents
+            IndustryDocumentRef(filename=name, size_bytes=len(content))
+            for name, content in stored
         ],
     )
     _industries[analysis.id] = analysis
-    asyncio.create_task(_run_industry(analysis, documents, settings))
+    asyncio.create_task(
+        _run_industry_refinement(analysis, previous, new_filenames, settings)
+    )
     return analysis

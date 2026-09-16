@@ -2,35 +2,57 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Markdown } from "@/components/Markdown";
-import { fmtBytes } from "@/lib/api";
+import { RefineBox } from "@/components/RefineBox";
+import { fmtBytes, fmtWhen } from "@/lib/api";
 import type { CompanyAnalysis, Comparison, IndustryAnalysis, RunStatus } from "@/lib/api";
 
 export type ResultTab =
   | { kind: "comparison"; id: string; title: string; status: RunStatus; comparison: Comparison }
-  | { kind: "company"; id: string; title: string; status: RunStatus; analysis: CompanyAnalysis }
-  | { kind: "industry"; id: string; title: string; status: RunStatus; industry: IndustryAnalysis };
+  | {
+      kind: "company";
+      id: string;
+      title: string;
+      status: RunStatus;
+      /** The original analysis and every revision of it, oldest first. */
+      revisions: CompanyAnalysis[];
+    }
+  | {
+      kind: "industry";
+      id: string;
+      title: string;
+      status: RunStatus;
+      revisions: IndustryAnalysis[];
+    };
 
 export function ResultsPane({
   tabs,
   focusId,
   empty,
+  onRefine,
+  onDeleteRevision,
 }: {
   tabs: ResultTab[];
   /** Set when a run is started, so the pane jumps to what you just asked for. */
   focusId: string | null;
   empty?: React.ReactNode;
+  onRefine?: (tab: ResultTab, instruction: string, files: File[]) => Promise<void>;
+  onDeleteRevision?: (tab: ResultTab, revisionId: string) => Promise<void>;
 }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const lastFocus = useRef<string | null>(null);
 
   useEffect(() => {
-    if (focusId && focusId !== lastFocus.current) {
-      lastFocus.current = focusId;
-      setActiveId(focusId);
-    }
-  }, [focusId]);
+    if (!focusId || focusId === lastFocus.current) return;
+    lastFocus.current = focusId;
+    // A revision focuses the thread it belongs to.
+    const owning = tabs.find(
+      (t) =>
+        t.id === focusId ||
+        (t.kind !== "comparison" && t.revisions.some((r) => r.id === focusId)),
+    );
+    setActiveId(owning?.id ?? focusId);
+  }, [focusId, tabs]);
 
-  // Keep a valid tab selected as tabs come and go.
   useEffect(() => {
     if (tabs.length === 0) {
       setActiveId(null);
@@ -61,6 +83,9 @@ export function ResultsPane({
           >
             <Dot status={tab.status} />
             <span className="truncate">{tab.title}</span>
+            {tab.kind !== "comparison" && tab.revisions.length > 1 && (
+              <span className="num text-xs text-subtle">·{tab.revisions.length}</span>
+            )}
           </button>
         ))}
       </div>
@@ -68,78 +93,165 @@ export function ResultsPane({
       <div className="card-body">
         {active.kind === "comparison" ? (
           <ComparisonBody comparison={active.comparison} />
-        ) : active.kind === "industry" ? (
-          <IndustryBody industry={active.industry} />
         ) : (
-          <AnalysisBody analysis={active.analysis} />
+          <Thread tab={active} onRefine={onRefine} onDeleteRevision={onDeleteRevision} />
         )}
       </div>
     </div>
   );
 }
 
-function ComparisonBody({ comparison }: { comparison: Comparison }) {
-  if (comparison.status === "running") {
-    return (
-      <Waiting label={`Comparing ${comparison.companies.length} companies…`} />
-    );
-  }
-  if (comparison.status === "error") {
-    return <p className="text-sm text-red-600">{comparison.error}</p>;
-  }
-  return (
-    <>
-      <Header
-        title="Comparison"
-        subtitle={comparison.companies.map((c) => c.company_name).join(" · ")}
-        text={comparison.markdown ?? ""}
-      />
-      <Markdown>{comparison.markdown ?? ""}</Markdown>
-      <Footer model={comparison.model} input={comparison.input_tokens} output={comparison.output_tokens} />
-    </>
-  );
-}
+function Thread({
+  tab,
+  onRefine,
+  onDeleteRevision,
+}: {
+  tab: Extract<ResultTab, { kind: "company" | "industry" }>;
+  onRefine?: (tab: ResultTab, instruction: string, files: File[]) => Promise<void>;
+  onDeleteRevision?: (tab: ResultTab, revisionId: string) => Promise<void>;
+}) {
+  const latest = tab.revisions[tab.revisions.length - 1];
+  const busy = tab.revisions.some((r) => r.status === "running");
 
-function IndustryBody({ industry }: { industry: IndustryAnalysis }) {
-  if (industry.status === "running") {
-    return <Waiting label={`Reading ${industry.documents.length} document(s)…`} />;
-  }
-  if (industry.status === "error") {
-    return <p className="text-sm text-red-600">{industry.error}</p>;
-  }
   return (
     <>
-      <Header
-        title={industry.title}
-        subtitle={industry.documents
-          .map((d) => `${d.filename} (${fmtBytes(d.size_bytes)})`)
-          .join(" · ")}
-        text={industry.markdown ?? ""}
-      />
-      {industry.prompt && (
-        <p className="mb-4 border-l-2 border-line pl-3 text-sm italic text-muted">
-          {industry.prompt}
-        </p>
+      {onRefine && latest?.status === "done" && (
+        <RefineBox
+          allowFiles={tab.kind === "industry"}
+          busy={busy}
+          placeholder={
+            tab.kind === "industry"
+              ? "Ask for a change — a different angle, more on one section, or add documents."
+              : "Ask for a change — more on the debt, a shorter version, a different angle."
+          }
+          onSubmit={(instruction, files) => onRefine(tab, instruction, files)}
+        />
       )}
-      <Markdown>{industry.markdown ?? ""}</Markdown>
-      <Footer
-        model={industry.model}
-        input={industry.input_tokens}
-        output={industry.output_tokens}
-        caveat="Read from the documents you uploaded — check anything you rely on against the source."
-      />
+
+      {tab.revisions.map((revision, index) => (
+        <section
+          key={revision.id}
+          className={index > 0 ? "mt-8 border-t-2 border-line pt-6" : ""}
+        >
+          {revision.instruction && (
+            <div className="mb-4 rounded-md bg-accent-soft px-3 py-2">
+              <p className="label text-accent">You asked</p>
+              <p className="mt-1 text-sm text-ink">{revision.instruction}</p>
+            </div>
+          )}
+          <RevisionHeader
+            tab={tab}
+            revision={revision}
+            index={index}
+            total={tab.revisions.length}
+            onDelete={onDeleteRevision}
+          />
+          {tab.kind === "company" ? (
+            <CompanyBody analysis={revision as CompanyAnalysis} />
+          ) : (
+            <IndustryBody industry={revision as IndustryAnalysis} />
+          )}
+        </section>
+      ))}
     </>
   );
 }
 
-function AnalysisBody({ analysis }: { analysis: CompanyAnalysis }) {
+function RevisionHeader({
+  tab,
+  revision,
+  index,
+  total,
+  onDelete,
+}: {
+  tab: Extract<ResultTab, { kind: "company" | "industry" }>;
+  revision: CompanyAnalysis | IndustryAnalysis;
+  index: number;
+  total: number;
+  onDelete?: (tab: ResultTab, revisionId: string) => Promise<void>;
+}) {
+  const [copied, setCopied] = useState(false);
+  const title =
+    tab.kind === "company"
+      ? (revision as CompanyAnalysis).company_name ||
+        (revision as CompanyAnalysis).company_number
+      : (revision as IndustryAnalysis).title;
+  const subtitle =
+    tab.kind === "company"
+      ? (revision as CompanyAnalysis).filings
+          .map((f) => `${f.made_up_to ?? f.date} (${fmtBytes(f.size_bytes)})`)
+          .join(" · ")
+      : (revision as IndustryAnalysis).documents
+          .map((d) => `${d.filename} (${fmtBytes(d.size_bytes)})`)
+          .join(" · ");
+  const body = fullText(tab.kind, revision);
+
+  return (
+    <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
+      <div className="min-w-0">
+        <h2 className="flex items-baseline gap-2 text-base font-semibold text-ink">
+          {title}
+          {total > 1 && (
+            <span className="num text-xs font-normal text-subtle">
+              {index === 0 ? "original" : `revision ${index}`}
+              {revision.created_at ? ` · ${fmtWhen(revision.created_at)}` : ""}
+            </span>
+          )}
+        </h2>
+        {subtitle && <p className="mt-0.5 text-xs text-muted">{subtitle}</p>}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {body && (
+          <button
+            type="button"
+            onClick={() => {
+              navigator.clipboard.writeText(body);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 2000);
+            }}
+            className="btn-secondary"
+          >
+            {copied ? "Copied" : "Copy Markdown"}
+          </button>
+        )}
+        {onDelete && (
+          <button
+            type="button"
+            onClick={() => {
+              const what = total > 1 ? "this version" : "this analysis";
+              if (confirm(`Delete ${what} permanently?`)) onDelete(tab, revision.id);
+            }}
+            className="rounded-md border border-line px-2 py-1 text-xs text-muted transition-colors hover:border-red-300 hover:bg-red-50 hover:text-red-600 dark:hover:border-red-900 dark:hover:bg-red-950/40"
+          >
+            Delete
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function fullText(
+  kind: "company" | "industry",
+  revision: CompanyAnalysis | IndustryAnalysis,
+): string {
+  if (kind === "industry") return (revision as IndustryAnalysis).markdown ?? "";
+  const analysis = revision as CompanyAnalysis;
+  return [analysis.research_markdown, analysis.ownership_markdown, analysis.markdown]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function CompanyBody({ analysis }: { analysis: CompanyAnalysis }) {
   if (analysis.status === "running") {
     return (
       <Waiting
         label={
-          analysis.research
-            ? "Reading the filings, the web, and the ownership record…"
-            : "Reading the filings and the ownership record…"
+          analysis.instruction
+            ? "Re-reading the filings…"
+            : analysis.research
+              ? "Reading the filings, the web, and the ownership record…"
+              : "Reading the filings and the ownership record…"
         }
       />
     );
@@ -149,19 +261,6 @@ function AnalysisBody({ analysis }: { analysis: CompanyAnalysis }) {
   }
   return (
     <>
-      <Header
-        title={analysis.company_name || analysis.company_number}
-        subtitle={analysis.filings
-          .map((f) => `${f.made_up_to ?? f.date} (${fmtBytes(f.size_bytes)})`)
-          .join(" · ")}
-        text={[
-          analysis.research_markdown,
-          analysis.ownership_markdown,
-          analysis.markdown,
-        ]
-          .filter(Boolean)
-          .join("\n\n")}
-      />
       {analysis.research_markdown && (
         <div className="mb-6">
           <p className="label mb-3">From the web</p>
@@ -199,6 +298,78 @@ function AnalysisBody({ analysis }: { analysis: CompanyAnalysis }) {
   );
 }
 
+function IndustryBody({ industry }: { industry: IndustryAnalysis }) {
+  if (industry.status === "running") {
+    return (
+      <Waiting
+        label={
+          industry.instruction
+            ? "Re-reading the documents…"
+            : `Reading ${industry.documents.length} document(s)…`
+        }
+      />
+    );
+  }
+  if (industry.status === "error") {
+    return <p className="text-sm text-red-600">{industry.error}</p>;
+  }
+  return (
+    <>
+      {industry.prompt && !industry.instruction && (
+        <p className="mb-4 border-l-2 border-line pl-3 text-sm italic text-muted">
+          {industry.prompt}
+        </p>
+      )}
+      <Markdown>{industry.markdown ?? ""}</Markdown>
+      <Footer
+        model={industry.model}
+        input={industry.input_tokens}
+        output={industry.output_tokens}
+        caveat="Read from the documents you uploaded — check anything you rely on against the source."
+      />
+    </>
+  );
+}
+
+function ComparisonBody({ comparison }: { comparison: Comparison }) {
+  const [copied, setCopied] = useState(false);
+  if (comparison.status === "running") {
+    return <Waiting label={`Comparing ${comparison.companies.length} companies…`} />;
+  }
+  if (comparison.status === "error") {
+    return <p className="text-sm text-red-600">{comparison.error}</p>;
+  }
+  return (
+    <>
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-ink">Comparison</h2>
+          <p className="mt-0.5 text-xs text-muted">
+            {comparison.companies.map((c) => c.company_name).join(" · ")}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            navigator.clipboard.writeText(comparison.markdown ?? "");
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+          }}
+          className="btn-secondary shrink-0"
+        >
+          {copied ? "Copied" : "Copy Markdown"}
+        </button>
+      </div>
+      <Markdown>{comparison.markdown ?? ""}</Markdown>
+      <Footer
+        model={comparison.model}
+        input={comparison.input_tokens}
+        output={comparison.output_tokens}
+      />
+    </>
+  );
+}
+
 function Footer({
   model,
   input,
@@ -216,37 +387,6 @@ function Footer({
       {input > 0 && ` · ${input.toLocaleString()} in / ${output.toLocaleString()} out tokens`}
       . {caveat}
     </p>
-  );
-}
-
-function Header({
-  title,
-  subtitle,
-  text,
-}: {
-  title: string;
-  subtitle?: string;
-  text: string;
-}) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="mb-4 flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
-      <div className="min-w-0">
-        <h2 className="text-base font-semibold text-ink">{title}</h2>
-        {subtitle && <p className="mt-0.5 text-xs text-muted">{subtitle}</p>}
-      </div>
-      <button
-        type="button"
-        onClick={() => {
-          navigator.clipboard.writeText(text);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 2000);
-        }}
-        className="btn-secondary shrink-0"
-      >
-        {copied ? "Copied" : "Copy Markdown"}
-      </button>
-    </div>
   );
 }
 
