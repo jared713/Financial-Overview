@@ -9,6 +9,10 @@ accounts as PDFs, and have Claude review and compare them.
 review, a regulator's report, a trade survey), say what you want out of them, and get a
 write-up grounded in those documents alone.
 
+Both keep their state while you move between them: your company list, search results,
+uploaded files and open results are all still there when you switch back, and a run
+started on one side keeps going while you work on the other.
+
 Work one company at a time in the left-hand rail: add it, tick up to **4 years** of
 accounts, and analyse it. Claude reads the actual filed PDFs and the write-up opens in its
 own tab on the right. Repeat for up to **5 companies**, then hit **Compare** — with an
